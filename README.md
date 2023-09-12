@@ -1,62 +1,28 @@
-
-# Python Project Template
-
-A low dependency and really simple to start project template for Python Projects.
-
-See also 
-- [Flask-Project-Template](https://github.com/rochacbruno/flask-project-template/) for a full feature Flask project including database, API, admin interface, etc.
-- [FastAPI-Project-Template](https://github.com/rochacbruno/fastapi-project-template/) The base to start an openapi project featuring: SQLModel, Typer, FastAPI, JWT Token Auth, Interactive Shell, Management Commands.
-
-### HOW TO USE THIS TEMPLATE
-
-> **DO NOT FORK** this is meant to be used from **[Use this template](https://github.com/rochacbruno/python-project-template/generate)** feature.
-
-1. Click on **[Use this template](https://github.com/rochacbruno/python-project-template/generate)**
-3. Give a name to your project  
-   (e.g. `my_awesome_project` recommendation is to use all lowercase and underscores separation for repo names.)
-3. Wait until the first run of CI finishes  
-   (Github Actions will process the template and commit to your new repo)
-4. If you want [codecov](https://about.codecov.io/sign-up/) Reports and Automatic Release to [PyPI](https://pypi.org)  
-  On the new repository `settings->secrets` add your `PYPI_API_TOKEN` and `CODECOV_TOKEN` (get the tokens on respective websites)
-4. Read the file [CONTRIBUTING.md](CONTRIBUTING.md)
-5. Then clone your new project and happy coding!
-
-> **NOTE**: **WAIT** until first CI run on github actions before cloning your new project.
-
-### What is included on this template?
-
-- 🖼️ Templates for starting multiple application types:
-  * **Basic low dependency** Python program (default) [use this template](https://github.com/rochacbruno/python-project-template/generate)
-  * **Flask** with database, admin interface, restapi and authentication [use this template](https://github.com/rochacbruno/flask-project-template/generate).
-  **or Run `make init` after cloning to generate a new project based on a template.**
-- 📦 A basic [setup.py](setup.py) file to provide installation, packaging and distribution for your project.  
-  Template uses setuptools because it's the de-facto standard for Python packages, you can run `make switch-to-poetry` later if you want.
-- 🤖 A [Makefile](Makefile) with the most useful commands to install, test, lint, format and release your project.
-- 📃 Documentation structure using [mkdocs](http://www.mkdocs.org)
-- 💬 Auto generation of change log using **gitchangelog** to keep a HISTORY.md file automatically based on your commit history on every release.
-- 🐋 A simple [Containerfile](Containerfile) to build a container image for your project.  
-  `Containerfile` is a more open standard for building container images than Dockerfile, you can use buildah or docker with this file.
-- 🧪 Testing structure using [pytest](https://docs.pytest.org/en/latest/)
-- ✅ Code linting using [flake8](https://flake8.pycqa.org/en/latest/)
-- 📊 Code coverage reports using [codecov](https://about.codecov.io/sign-up/)
-- 🛳️ Automatic release to [PyPI](https://pypi.org) using [twine](https://twine.readthedocs.io/en/latest/) and github actions.
-- 🎯 Entry points to execute your program using `python -m <i3expo>` or `$ i3expo` with basic CLI argument parsing.
-- 🔄 Continuous integration using [Github Actions](.github/workflows/) with jobs to lint, test and release your project on Linux, Mac and Windows environments.
-
-> Curious about architectural decisions on this template? read [ABOUT_THIS_TEMPLATE.md](ABOUT_THIS_TEMPLATE.md)  
-> If you want to contribute to this template please open an [issue](https://github.com/rochacbruno/python-project-template/issues) or fork and send a PULL REQUEST.
-
-[❤️ Sponsor this project](https://github.com/sponsors/rochacbruno/)
-
-<!--  DELETE THE LINES ABOVE THIS AND WRITE YOUR PROJECT README BELOW -->
-
----
 # i3expo
 
 [![codecov](https://codecov.io/gh/laur89/i3expo/branch/main/graph/badge.svg?token=i3expo_token_here)](https://codecov.io/gh/laur89/i3expo)
 [![CI](https://github.com/laur89/i3expo/actions/workflows/main.yml/badge.svg)](https://github.com/laur89/i3expo/actions/workflows/main.yml)
 
-Awesome i3expo created by laur89
+## Overwiew
+
+Expo is an simple and straightforward way to get a visual impression of all your
+current virtual desktops that many compositing window managers use. It's not a very
+powerful approach, but a very intuitive one and especially fits workflows that use
+lots of temporary windows or those in which the workspaces are mentally arranged in
+a grid.
+
+i3expo emulates that function within the limitations of a non-compositing window
+manager. By listening to the IPC, it takes a screenshot whenever a window event
+occurs. Thanks to a fast C library, this produces negligible overhead in normal
+operation and allows the script to remember what state you left a workspace in.
+
+The script is run as a background process and reacts to signals in order to open its
+UI in which you get an overview of the known state of your workspaces and can select
+another with the mouse or keyboard.
+
+Example output:
+
+![Sample](img/ui.png)
 
 ## Install it from PyPI
 
@@ -66,20 +32,66 @@ pip install i3expo
 
 ## Usage
 
-```py
-from i3expo import BaseClass
-from i3expo import base_function
+Compile the `prtscn.c` following instructions in the file, or use the included
+pre-compiled `i3expo/prtscn.so`
 
-BaseClass().base_method()
-base_function()
+Note the `prtscn.so` needs to be in the same directory as the Python script, ie
+in `i3expo/` subdir.
+
+Default configuration is written into `$XDG_CONFIG_DIR/i3expo/config`. Color values
+can be specified by using their PyGame names or in #fff or #ffffff hex.
+
+Run `i3expod.py`, preferably in a terminal in order to catch any errors in this
+pre-alpha state.
+
+Send `SIGUSR1` to `i3expod.py` to show the Expo UI, for example by adding a `bindsym`
+for `killall -s SIGUSR1 i3expod.py` to your i3 config. Send `SIGHUP` to have the
+application reload its configuration.
+
+Navigate the UI with the mouse or with they keyboard using `hjkl`, the arrow keys,
+Return and Escape.
+
+Recommended i3 config:
+
+```
+  exec_always --no-startup-id i3expod.py
+  for_window [class="^i3expod\.py$"] fullscreen enable
+  bindsym $mod1+e exec --no-startup-id killall -s SIGUSR1 i3expod.py
 ```
 
-```bash
-$ python -m i3expo
-#or
-$ i3expo
-```
+## Limitations
 
-## Development
+Since it works by taking screenshots, the application cannot know workspaces it
+hasn't seen yet. Furthermore, the updates are less continuous than you might be used
+to if you're coming from a compositing WM where they can happen live and in the
+background.
 
-Read the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+## Caution
+
+This is pre-alpha software and some bugs are still around. It works for my own,
+single monitor and a common workflow. There is not much input validation and no
+protection against you screwing up the layout or worse.
+
+## Bugs
+
+Stalled windows whose content i3 doesn't know cause interface bugs and could
+probably be handled better, but this needs more testing.
+
+Daemon's cpu usage raises considerably upon first time UI gets rendered. Believe this
+has something to do with pygame not de-initing itself properly. *Confirm this is still
+the case*
+
+## Todo
+
+- It's theoretically feasible to take the window information from i3's tree and allow
+for dragging of windows from one workspace to another or even from container to
+container. However, this would be massively complex (especially on the UI side) and
+it's not clear if it would be worth the effort.
+- ~~multimonitor support~~
+- pause screenshotting while screen is locked, eg via i3lock
+
+## Credit
+
+- original code from https://gitlab.com/d.reis/i3expo
+- Stackoverflow user JHolta for the screenshot library to be found in this thread:
+https://stackoverflow.com/questions/69645/take-a-screenshot-via-a-python-script-linux
