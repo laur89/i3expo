@@ -4,10 +4,12 @@ import os
 from setuptools import find_packages, setup
 
 
+# note the version is managed by zest.releaser:
+version = "0.0.1.dev0"
+
+
 def read(*paths, **kwargs):
     """Read the contents of a text file safely.
-    >>> read("i3expo", "VERSION")
-    '0.1.0'
     >>> read("README.md")
     ...
     """
@@ -31,9 +33,9 @@ def read_requirements(path):
 
 setup(
     name="i3expo",
-    version=read("i3expo", "VERSION"),
+    version=version,
     description="Awesome i3expo created by laur89",
-    url="https://github.com/laur89/i3expo/",
+    url="https://github.com/laur89/i3expo",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     author="laur89",

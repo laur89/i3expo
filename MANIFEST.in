@@ -1,5 +1,4 @@
 include LICENSE
-include HISTORY.md
-include Containerfile
+include CHANGELOG.md
 graft tests
 graft i3expo
