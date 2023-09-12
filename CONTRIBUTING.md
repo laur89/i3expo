@@ -1,6 +1,6 @@
 # How to develop on this project
 
-project_name welcomes contributions from the community.
+i3expo welcomes contributions from the community.
 
 **You need PYTHON3!**
 
@@ -8,9 +8,9 @@ This instructions are for linux base systems. (Linux, MacOS, BSD, etc.)
 ## Setting up your own fork of this repo.
 
 - On github interface click on `Fork` button.
-- Clone your fork of this repo. `git clone git@github.com:YOUR_GIT_USERNAME/project_urlname.git`
-- Enter the directory `cd project_urlname`
-- Add upstream repo `git remote add upstream https://github.com/author_name/project_urlname`
+- Clone your fork of this repo. `git clone git@github.com:YOUR_GIT_USERNAME/i3expo.git`
+- Enter the directory `cd i3expo`
+- Add upstream repo `git remote add upstream https://github.com/laur89/i3expo`
 
 ## Setting up your own virtual environment
 
