@@ -4,9 +4,9 @@
 #    pip3 install --user -r ./requirements.txt
 #
 # add i3 conf:
-#   exec_always --no-startup-id i3expod.py
-#   for_window [class="^i3expod\.py$"] fullscreen enable
-#   bindsym $mod1+e exec --no-startup-id killall -s SIGUSR1 i3expod.py
+#   exec_always --no-startup-id i3expo
+#   for_window [class="^i3expo$"] fullscreen enable
+#   bindsym $mod1+e exec --no-startup-id killall -s SIGUSR1 i3expo
 
 import ctypes
 import os
@@ -20,7 +20,7 @@ import traceback
 import pprint
 import time
 import math
-from debounce import Debounce
+from .debounce import Debounce
 from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
@@ -30,20 +30,13 @@ from xdg.BaseDirectory import xdg_config_home
 
 pp = pprint.PrettyPrinter(indent=4)
 
+screenshot_lib = 'prtscn.so'
 global_updates_running = True
 global_knowledge = {'active': -1}  # 'active' = currently active ws num
 
 qm_cache = {}  # screen_w x screen_h mapped against rendered question mark
 
-i3 = i3ipc.Connection()
-
-config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
-screenshot_lib = 'prtscn.so'
-screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
-grab = ctypes.CDLL(screenshot_lib_path)
-grab.getScreen.argtypes = []
-blacklist_classes = ['i3expod.py']  # if focused, don't grab screenshot
-loop_interval = 100.0  # will be overwritten by config
+blacklist_classes = ['i3expo']  # if focused, don't grab screenshot
 
 
 def shutdown_common():
@@ -68,6 +61,10 @@ def on_shutdown(i3conn, e):
 
 
 def signal_reload(signal, stack_frame):
+    hot_reload()
+
+
+def hot_reload():
     global loop_interval
 
     read_config()
@@ -77,7 +74,7 @@ def signal_reload(signal, stack_frame):
 
 
 def should_show_ui():
-    return len(global_knowledge) - 1 > 1
+    return len(global_knowledge) - 1 > 1  # note -1 is prolly because of the outlier 'active' key
 
 
 def signal_toggle_ui(signal, stack_frame):
@@ -86,7 +83,7 @@ def signal_toggle_ui(signal, stack_frame):
     if not global_updates_running:  # UI toggle
         global_updates_running = True
     elif should_show_ui():
-        # i3.command('workspace i3expod-temporary-workspace')  # jump to temp ws; doesn't seem to work well in multimon setup; introduced by  https://gitlab.com/d.reis/i3expo/-/commit/d14685d16fd140b3a7374887ca086ea66e0388f5 - looks like it solves problem where fullscreen state is lost on expo toggle
+        # i3.command('workspace i3expo-temporary-workspace')  # jump to temp ws; doesn't seem to work well in multimon setup; introduced by  https://gitlab.com/d.reis/i3expo/-/commit/d14685d16fd140b3a7374887ca086ea66e0388f5 - looks like it solves problem where fullscreen state is lost on expo toggle
         global_updates_running = False
         updater_debounced.reset()
 
@@ -142,8 +139,7 @@ def grab_screen(i):
     w = i['w']
     h = i['h']
 
-    size = w * h
-    objlength = size * 3
+    objlength = w * h * 3  # 3 for R,G,B
 
     result = (ctypes.c_ubyte*objlength)()
 
@@ -155,19 +151,20 @@ def update_workspace(ws, focused_ws):
     i = global_knowledge.get(ws.num)
     if i is None:
         i = global_knowledge[ws.num] = {
-            'name'        : ws.name,
+            'name'        : '',
             'screenshot'  : None,  # byte-array representation of this ws screenshot
             'last-update' : 0.0,   # unix epoch when ws was last grabbed
-            'state'       : 0,     # numeric representation of current state of ws - windows and their sizes
+            'state'       : 0,     # numeric representation of current state of ws - windows and their sizes/is focused et al
             'x'           : 0,
             'y'           : 0,
             'w'           : 0,
             'h'           : 0,
-            'ratio'       : 0,
+            'ratio'       : 0.0,
             'windows'     : {}    # TODO unused atm
         }
 
     # always update dimensions; eg ws might've been moved onto a different output:
+    i['name'] = ws.name
     i['x'] = ws.rect.x
     i['y'] = ws.rect.y
     i['w'] = ws.rect.width
@@ -189,87 +186,80 @@ def init_knowledge():
 
 
 # ! Note calling this function will also store the current state in global_knowledge!
-# TODO: this will likely be deprecaated when/if i3 implements 'resize' event. actually... we now also track window title changes.
-def tree_has_changed(focused_ws):
+# TODO: this will likely be deprecated when/if i3 implements 'resize' event. actually... we now also track window title changes.
+def tree_has_changed(ws):
     state = 0
-    for con in focused_ws.leaves():
+    for con in ws.leaves():
         f = 31 if con.focused else 0  # so focus change can be detected
         # add following if you want window title to be included in the state:
         # abs(hash(con.name)) % 10_000
         # or: hash(con.name) % 10_000  (if neg values are ok)
         state += con.id % (con.rect.x + con.rect.y + con.rect.width + con.rect.height + hash(con.name) % 10_000 + f)
 
-    if global_knowledge[focused_ws.num]['state'] == state:
+    if global_knowledge[ws.num]['state'] == state:
         return False
-    global_knowledge[focused_ws.num]['state'] = state
-
+    global_knowledge[ws.num]['state'] = state
     return True
 
 
-def should_update(rate_limit_period, focused_con, focused_ws, con_tree, event, force, only_focused_win):
-    if not global_updates_running: return False
-    elif rate_limit_period is not None and time.time() - global_knowledge[focused_ws.num]['last-update'] <= rate_limit_period: return False
-    elif focused_con.window_class in blacklist_classes: return False
-    elif only_focused_win and not event.container.focused:  # note assumes WindowEvent
-    # elif only_focused_win and focused_con.id != event.container.id:  # note assumes WindowEvent
+def should_update_ws(rate_limit_period, ws, force):
+    if rate_limit_period is not None and time.time() - global_knowledge[ws.num]['last-update'] <= rate_limit_period:
         return False
-    elif force:
-        tree_has_changed(focused_ws)  # call it, as we still want to store 'state' value if changed
-        updater_debounced.reset()
-        return True
-    elif not tree_has_changed(focused_ws):
-        return False
-
-    return True
+    return tree_has_changed(ws) or force
 
 
 def update_state(i3, e=None, rate_limit_period=None,
                  force=False, debounced=False,
                  all_active_ws=False, only_focused_win=False):
-    # print('TOGGLING updat_state() by event [{}]; force: {}, debounced: {}'.format(e.change if e else 'None', force, debounced))
+    # print('[ TOGGLING updat_state() by event [{}]; force: {}, debounced: {}'.format(e.change if e else 'None', force, debounced))
 
     time.sleep(0.2)  # TODO system-specific; configurize? also, maybe only sleep if it's _not_ debounced?
 
     # t0 = time.time()
     tree = i3.get_tree()
     focused_con = tree.find_focused()
+
+    if (not global_updates_running or
+        focused_con.window_class in blacklist_classes or
+        (only_focused_win and not e.container.focused)):  # note assumes WindowEvent
+        #(only_focused_win and focused_con.id != event.container.id)  # note assumes WindowEvent
+            return
+
     focused_ws = focused_con.workspace()
     workspaces = tree.workspaces()
 
-    wss = []
     if all_active_ws:
-        ws_list = [output.current_workspace for output in i3.get_outputs() if output.active]  # TODO: cache on OutputEvent? or maybe we could use some 'visible' attr of a ws instead of querying for outputs?
-        for ws in workspaces:
-            if ws.name in ws_list:
-                wss.append(ws)
+        active_ws_list = [output.current_workspace for output in i3.get_outputs() if output.active]  # TODO: cache on OutputEvent? or maybe we could use some 'visible' attr of a ws instead of querying for outputs?
+        wss = [ws for ws in workspaces if ws.name in active_ws_list]
     else:  # update/process only the currently focused ws
-        wss.append(focused_ws)
+        wss = [focused_ws]
 
     for ws in wss:
         update_workspace(ws, focused_ws)
-        if should_update(rate_limit_period, focused_con, ws, tree, e, force, only_focused_win):
+        if should_update_ws(rate_limit_period, ws, force):
             i = global_knowledge[ws.num]
-            # t0 = time.time()
+            # t1 = time.time()
             i['screenshot'] = grab_screen(i)
-            # print('grabbing image took {}'.format(time.time()-t0))
+            # print('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
             i['last-update'] = time.time()
+            if not debounced and ws.id == focused_ws.id:
+                updater_debounced.reset()  # TODO: unsure this is wanted/needed
 
     wspace_nums = [w.num for w in workspaces]
-    deleted = [n for n in global_knowledge if type(n) is int and n not in wspace_nums]  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
+    deleted = [n for n in global_knowledge if n not in wspace_nums and type(n) is int]  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
     for n in deleted:
         del global_knowledge[n]
 
-    # print('whole update_state() took {}'.format(time.time()-t0))
+    # print('] whole update_state() took {}'.format(time.time()-t0))
 
 
 def get_hovered_tile(mpos, tiles):
-    for tile in tiles:
-        t = tiles[tile]
+    for tile_idx, t in tiles.items():
         if (mpos[0] >= t['ul'][0]
                 and mpos[0] <= t['br'][0]
                 and mpos[1] >= t['ul'][1]
                 and mpos[1] <= t['br'][1]):
-            return tile
+            return tile_idx
     return None
 
 
@@ -639,27 +629,40 @@ def on_ws(i3, e):
     update_state(i3, e, rate_limit_period=loop_interval, force=True)
 
 
-if __name__ == "__main__":  # pragma: no cover
+def run():
+    global i3
+    global config
+    global config_file
+    global grab
+    global updater_debounced
+
+    i3 = i3ipc.Connection()
 
     converters = {'color': get_color}
     config = configparser.ConfigParser(converters = converters)
+    config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
+    hot_reload()  # reads config and inits other global var(s)
+
+    init_knowledge()
+    updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
+                                 partial(update_state, debounced=True))
+
+    screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
+    grab = ctypes.CDLL(screenshot_lib_path)
+    grab.getScreen.argtypes = []
 
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)
     signal.signal(signal.SIGHUP, signal_reload)
     signal.signal(signal.SIGUSR1, signal_toggle_ui)
 
-    read_config()
-    init_knowledge()
-    updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
-                                 partial(update_state, debounced=True))
     update_state(i3, all_active_ws=True)
 
     # i3.on('window::new', update_state)  # no need when changing on window::focus
     # i3.on('window::close', update_state)  # no need when changing on window::focus
     i3.on('window::move', updater_debounced)
     i3.on('window::floating', updater_debounced)
-    i3.on('window::fullscreen_mode', partial(updater_debounced, force=True))
+    i3.on('window::fullscreen_mode', updater_debounced)
     i3.on('window::focus', updater_debounced)
     i3.on('window::title', partial(updater_debounced, only_focused_win=True))
     i3.on('workspace', on_ws)
@@ -669,9 +672,13 @@ if __name__ == "__main__":  # pragma: no cover
     i3_thread.daemon = True
     i3_thread.start()
 
-    loop_interval = config.getfloat('CONF', 'forced_update_interval_sec')
+    # TODO: consider higher interval for non-focused WS; just to shed some load
     while True:
         time.sleep(loop_interval)
         # os.nice(10)
         update_state(i3, rate_limit_period=loop_interval, all_active_ws=True, force=True)
         # os.nice(-10)
+
+
+if __name__ == '__main__':  # pragma: no cover
+    run()
