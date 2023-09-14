@@ -6,8 +6,9 @@ name: default
 steps:
 # note zest does everything, including tagging!
 - name: version-tag-changelog
-  image: python:3-slim-bookworm
+  image: python:3-alpine
   commands:
+  - apk add --no-cache git
   - git config --global user.email "zest.releaser@example.com"
   - git config --global user.name "Zest Releaser"
   - pip install zest.releaser
@@ -33,7 +34,11 @@ steps:
 - name: build
   image: python:3-alpine
   commands:
-  - python setup.py bdist_egg
+  - pip install build
+  - python -m build
+  # alternatively, using pipx instead of pip:
+  #- pipx install build
+  #- pyproject-build
   when:
     event: tag
 
@@ -50,6 +55,21 @@ steps:
        - sha256
   when:
     event: tag
+
+- name: pypi-publish
+  image: plugins/pypi
+  settings:
+    username:
+      from_secret: public_pypi_username
+    password:
+      from_secret: public_pypi_password
+    skip_build: true
+    distributions:
+    - sdist
+    - bdist_wheel
+  when:
+    event:
+    - tag
 
 trigger:
   ref:
