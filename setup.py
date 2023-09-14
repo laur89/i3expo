@@ -39,12 +39,11 @@ setup(
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     author="laur89",
-    # packages=find_packages(exclude=["tests", ".github", "img"]),
-    packages=["i3expo"],
+    packages=find_packages(exclude=["tests", ".github", "img"]),
+    # packages=["i3expo"],
     install_requires=read_requirements("requirements.txt"),
     entry_points={
-        "console_scripts": ["i3expo = i3expo.__main__:run"]
-        #"console_scripts": ["i3expo = i3expo:run"]
+        "console_scripts": ["i3expo = i3expo:run"]
     },
     extras_require={"test": read_requirements("requirements-test.txt")},
 )
