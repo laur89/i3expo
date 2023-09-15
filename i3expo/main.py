@@ -12,6 +12,7 @@ import ctypes
 import os
 import configparser
 import xdg
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # needs to be set prior to importing pygame
 import pygame
 import i3ipc
 import copy
@@ -490,11 +491,11 @@ def draw_grid(screen, grid):
 
 
 def resolve_grid_layout(screen_w, screen_h):
-    l = len(global_knowledge) - 1
     grid = []
     max_tiles_per_row = 3 if screen_w >= screen_h else 2  # TODO: resolve from ratio?
 
     # TODO: need to start increasing max_nr_per_row as well from here?
+    l = len(global_knowledge) - 1
     rows = math.ceil(l/max_tiles_per_row)
     while rows > 0:
         tiles_on_row = math.ceil(l/rows)
