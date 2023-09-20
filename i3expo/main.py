@@ -11,8 +11,7 @@
 import ctypes
 import os
 import configparser
-import xdg
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # needs to be set prior to importing pygame
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # needs to be set prior to importing pygame; see https://github.com/pygame/pygame/issues/1468
 import pygame
 import i3ipc
 import copy
