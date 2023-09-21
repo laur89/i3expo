@@ -1,12 +1,19 @@
 """Python setup.py for i3expo package"""
 import io
 import os
-from setuptools import find_packages, setup
+from setuptools import find_packages, setup, Extension
 
 
 # note the version is managed by zest.releaser:
 version = "0.0.1.dev0"
 
+
+prtscn_py = Extension(
+    'prtscn_py',
+    sources=['prtscn_py.c'],
+    libraries=['X11'],
+    language='c',
+)
 
 def read(*paths, **kwargs):
     """Read the contents of a text file safely.
@@ -34,13 +41,14 @@ def read_requirements(path):
 setup(
     name="i3expo",
     version=version,
-    description="Awesome i3expo created by laur89",
+    description="i3expo",
     url="https://github.com/laur89/i3expo",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     author="laur89",
     packages=find_packages(exclude=["tests", ".github", "img"]),
     # packages=["i3expo"],
+    ext_modules=[prtscn_py],
     install_requires=read_requirements("requirements.txt"),
     entry_points={
         "console_scripts": ["i3expo = i3expo:run"]

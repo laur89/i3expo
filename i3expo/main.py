@@ -8,7 +8,6 @@
 #   for_window [class="^i3expo$"] fullscreen enable
 #   bindsym $mod1+e exec --no-startup-id killall -s SIGUSR1 i3expo
 
-import ctypes
 import os
 import configparser
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # needs to be set prior to importing pygame; see https://github.com/pygame/pygame/issues/1468
@@ -25,12 +24,12 @@ from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
 import pulp
+import prtscn_py
 
 from xdg.BaseDirectory import xdg_config_home
 
 pp = pprint.PrettyPrinter(indent=4)
 
-screenshot_lib = 'prtscn.so'
 global_updates_running = True
 global_knowledge = {'active': -1}  # 'active' = currently active ws num
 
@@ -40,9 +39,14 @@ blacklist_classes = ['i3expo']  # if focused, don't grab screenshot
 
 
 def shutdown_common():
+    global global_updates_running
+
     print('Shutting down...')
 
     try:
+        global_updates_running = False
+        updater_debounced.reset()
+
         pygame.display.quit()
         pygame.quit()
     finally:
@@ -134,24 +138,12 @@ def read_config():
             config.write(f)
 
 
-def grab_screen(i):
-    # print('GRABBING FOR: {}'.format(i['name']))
-    w = i['w']
-    h = i['h']
-
-    objlength = w * h * 3  # 3 for R,G,B
-
-    result = (ctypes.c_ubyte*objlength)()
-
-    grab.getScreen(i['x'], i['y'], w, h, result)
-    return result
-
-
 def update_workspace(ws, focused_ws):
     i = global_knowledge.get(ws.num)
     if i is None:
         i = global_knowledge[ws.num] = {
             'name'        : '',
+            'id'          : 0,
             'screenshot'  : None,  # byte-array representation of this ws screenshot
             'last-update' : 0.0,   # unix epoch when ws was last grabbed
             'state'       : 0,     # numeric representation of current state of ws - windows and their sizes/is focused et al
@@ -165,6 +157,7 @@ def update_workspace(ws, focused_ws):
 
     # always update dimensions; eg ws might've been moved onto a different output:
     i['name'] = ws.name
+    i['id'] = ws.id
     i['x'] = ws.rect.x
     i['y'] = ws.rect.y
     i['w'] = ws.rect.width
@@ -211,11 +204,11 @@ def should_update_ws(rate_limit_period, ws, force):
 def update_state(i3, e=None, rate_limit_period=None,
                  force=False, debounced=False,
                  all_active_ws=False, only_focused_win=False):
-    # print('[ TOGGLING updat_state() by event [{}]; force: {}, debounced: {}'.format(e.change if e else 'None', force, debounced))
+    print('[ TOGGLING updat_state() by event [{}]; force: {}, debounced: {}'.format(e.change if e else 'None', force, debounced))
 
     time.sleep(0.2)  # TODO system-specific; configurize? also, maybe only sleep if it's _not_ debounced?
 
-    # t0 = time.time()
+    t0 = time.time()
     tree = i3.get_tree()
     focused_con = tree.find_focused()
 
@@ -234,15 +227,25 @@ def update_state(i3, e=None, rate_limit_period=None,
     else:  # update/process only the currently focused ws
         wss = [focused_ws]
 
+    params = []
+    ws_to_process = []
     for ws in wss:
         update_workspace(ws, focused_ws)
         if should_update_ws(rate_limit_period, ws, force):
             i = global_knowledge[ws.num]
-            # t1 = time.time()
-            i['screenshot'] = grab_screen(i)
-            # print('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
-            i['last-update'] = time.time()
-            if not debounced and ws.id == focused_ws.id:
+            params += [i['x'], i['y'], i['w'], i['h']]
+            ws_to_process.append(i)
+
+    if params:
+        t1 = time.time()
+        screenshots = prtscn_py.get_screens(*params)
+        print('  -> grabbing {} WS{} took {}'.format(len(ws_to_process), 'es' if len(ws_to_process) > 1 else '', time.time()-t1))
+
+        t = time.time()
+        for idx, ws_state in enumerate(ws_to_process):
+            ws_state['screenshot'] = screenshots[idx]
+            ws_state['last-update'] = t
+            if not debounced and ws_state['id'] == focused_ws.id:
                 updater_debounced.reset()  # TODO: unsure this is wanted/needed
 
     wspace_nums = [w.num for w in workspaces]
@@ -250,7 +253,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     for n in deleted:
         del global_knowledge[n]
 
-    # print('] whole update_state() took {}'.format(time.time()-t0))
+    print('] whole update_state() took {}'.format(time.time()-t0))
 
 
 def get_hovered_tile(mpos, tiles):
@@ -633,7 +636,6 @@ def run():
     global i3
     global config
     global config_file
-    global grab
     global updater_debounced
 
     i3 = i3ipc.Connection()
@@ -646,10 +648,6 @@ def run():
     init_knowledge()
     updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
                                  partial(update_state, debounced=True))
-
-    screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
-    grab = ctypes.CDLL(screenshot_lib_path)
-    grab.getScreen.argtypes = []
 
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)
