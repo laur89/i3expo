@@ -24,13 +24,15 @@ from functools import partial
 from threading import Thread
 from PIL import Image, ImageDraw
 import pulp
-import prtscn_py
+import ctypes
+# import prtscn_py
 
 from xdg.BaseDirectory import xdg_config_home
 
 pp = pprint.PrettyPrinter(indent=4)
 
-global_updates_running = True
+screenshot_lib = 'prtscn.so'
+global_updates_running = True  # if false, we don't grab any screenshots/update internal state
 global_knowledge = {'active': -1}  # 'active' = currently active ws num
 
 qm_cache = {}  # screen_w x screen_h mapped against rendered question mark
@@ -138,6 +140,16 @@ def read_config():
             config.write(f)
 
 
+def grab_screen(i):
+    # print('GRABBING FOR: {}'.format(i['name']))
+    w = i['w']
+    h = i['h']
+
+    result = (ctypes.c_ubyte * w * h * 3)()  # *3 for R,G,B
+    grab.getScreen(i['x'], i['y'], w, h, result)
+    return result
+
+
 def update_workspace(ws, focused_ws):
     i = global_knowledge.get(ws.num)
     if i is None:
@@ -204,11 +216,10 @@ def should_update_ws(rate_limit_period, ws, force):
 def update_state(i3, e=None, rate_limit_period=None,
                  force=False, debounced=False,
                  all_active_ws=False, only_focused_win=False):
-    print('[ TOGGLING updat_state() by event [{}]; force: {}, debounced: {}'.format(e.change if e else 'None', force, debounced))
+    print('[ TOGGLING updat_state(){}; force: {}, debounced: {}'.format(' by event [' + e.change + ']' if e else '', force, debounced))
 
     time.sleep(0.2)  # TODO system-specific; configurize? also, maybe only sleep if it's _not_ debounced?
 
-    t0 = time.time()
     tree = i3.get_tree()
     focused_con = tree.find_focused()
 
@@ -216,37 +227,49 @@ def update_state(i3, e=None, rate_limit_period=None,
         focused_con.window_class in blacklist_classes or
         (only_focused_win and not e.container.focused)):  # note assumes WindowEvent
         #(only_focused_win and focused_con.id != event.container.id)  # note assumes WindowEvent
+            print('] update skipped')
             return
 
+    t0 = time.time()
     focused_ws = focused_con.workspace()
     workspaces = tree.workspaces()
 
     if all_active_ws:
         active_ws_list = [output.current_workspace for output in i3.get_outputs() if output.active]  # TODO: cache on OutputEvent? or maybe we could use some 'visible' attr of a ws instead of querying for outputs?
         wss = [ws for ws in workspaces if ws.name in active_ws_list]
+        updater_debounced.reset()
     else:  # update/process only the currently focused ws
         wss = [focused_ws]
 
-    params = []
-    ws_to_process = []
+    # either use our legacy grabbing logic...: {
     for ws in wss:
         update_workspace(ws, focused_ws)
         if should_update_ws(rate_limit_period, ws, force):
             i = global_knowledge[ws.num]
-            params += [i['x'], i['y'], i['w'], i['h']]
-            ws_to_process.append(i)
+            t1 = time.time()
+            i['screenshot'] = grab_screen(i)
+            print('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
+            i['last-update'] = t0
 
-    if params:
-        t1 = time.time()
-        screenshots = prtscn_py.get_screens(*params)
-        print('  -> grabbing {} WS{} took {}'.format(len(ws_to_process), 'es' if len(ws_to_process) > 1 else '', time.time()-t1))
+    # } ...or new py-bindings: {  # this seems to be slower, for whatever the reason
+    # params = []
+    # ws_to_process = []
+    # for ws in wss:
+        # update_workspace(ws, focused_ws)
+        # if should_update_ws(rate_limit_period, ws, force):
+            # i = global_knowledge[ws.num]
+            # params += [i['x'], i['y'], i['w'], i['h']]
+            # ws_to_process.append(i)
 
-        t = time.time()
-        for idx, ws_state in enumerate(ws_to_process):
-            ws_state['screenshot'] = screenshots[idx]
-            ws_state['last-update'] = t
-            if not debounced and ws_state['id'] == focused_ws.id:
-                updater_debounced.reset()  # TODO: unsure this is wanted/needed
+    # if params:
+        # t1 = time.time()
+        # screenshots = prtscn_py.get_screens(*params)
+        # print('  -> grabbing {} WS{} took {}'.format(len(ws_to_process), 'es' if len(ws_to_process) > 1 else '', time.time()-t1))
+
+        # for idx, ws_state in enumerate(ws_to_process):
+            # ws_state['screenshot'] = screenshots[idx]
+            # ws_state['last-update'] = t0
+    # }
 
     wspace_nums = [w.num for w in workspaces]
     deleted = [n for n in global_knowledge if n not in wspace_nums and type(n) is int]  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
@@ -636,6 +659,7 @@ def run():
     global i3
     global config
     global config_file
+    global grab
     global updater_debounced
 
     i3 = i3ipc.Connection()
@@ -648,6 +672,10 @@ def run():
     init_knowledge()
     updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
                                  partial(update_state, debounced=True))
+
+    screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
+    grab = ctypes.CDLL(screenshot_lib_path)
+    grab.getScreen.argtypes = []
 
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)
