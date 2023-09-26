@@ -33,11 +33,9 @@ pp = pprint.PrettyPrinter(indent=4)
 
 screenshot_lib = 'prtscn.so'
 global_updates_running = True  # if false, we don't grab any screenshots/update internal state
-global_knowledge = {'active': -1}  # 'active' = currently active ws num
+global_knowledge = {'active': -1, 'wss': {}}  # 'active' = currently active ws num
 
 qm_cache = {}  # screen_w x screen_h mapped against rendered question mark
-
-blacklist_classes = ['i3expo']  # if focused, don't grab screenshot
 
 
 def shutdown_common():
@@ -72,15 +70,25 @@ def signal_reload(signal, stack_frame):
 
 def hot_reload():
     global loop_interval
+    global output_blacklist
+    global win_class_blacklist
 
     read_config()
 
+    # TODO: compare previous & new output_blacklist & update ws knowledge! (e.g. the 'shown' field)
+
     # re-define global vars populated from config:
     loop_interval = config.getfloat('CONF', 'forced_update_interval_sec')
+    output_blacklist = [x.strip() for x in config.get('CONF', 'output_blacklist').split(',') if x and x.strip()]
+    win_class_blacklist = [x.strip() for x in config.get('CONF', 'win_class_blacklist').split(',') if x and x.strip()]
+
+
+def shown_ws():
+    return [k for k, v in global_knowledge['wss'].items() if v['shown']]
 
 
 def should_show_ui():
-    return len(global_knowledge) - 1 > 1  # note -1 is prolly because of the outlier 'active' key
+    return len(shown_ws()) > 1
 
 
 def signal_toggle_ui(signal, stack_frame):
@@ -119,6 +127,8 @@ def read_config():
 
             'forced_update_interval_sec' : 10.0,
             'debounce_period_sec'        : 1.0,
+            'output_blacklist'           : '',  # comma-separated values as a string; empty string for none
+            'win_class_blacklist'        : 'i3expo',  # comma-separated values as a string; empty string for none
 
             'names_show'                 : True,
             'names_font'                 : 'verdana',  # list with pygame.font.get_fonts()
@@ -151,9 +161,10 @@ def grab_screen(i):
 
 
 def update_workspace(ws, focused_ws):
-    i = global_knowledge.get(ws.num)
+    i = global_knowledge['wss'].get(ws.num)
     if i is None:
-        i = global_knowledge[ws.num] = {
+        i = global_knowledge['wss'][ws.num] = {
+            'op'          : None,    # output
             'name'        : '',
             'id'          : 0,
             'screenshot'  : None,  # byte-array representation of this ws screenshot
@@ -164,6 +175,7 @@ def update_workspace(ws, focused_ws):
             'w'           : 0,
             'h'           : 0,
             'ratio'       : 0.0,
+            'shown'       : not output_blacklist,  # whether this WS should be shown in the expo UI
             'windows'     : {}    # TODO unused atm
         }
 
@@ -182,12 +194,20 @@ def update_workspace(ws, focused_ws):
 
 
 def init_knowledge():
+    global outputs
+
     tree = i3.get_tree()
     focused_ws = tree.find_focused().workspace()
 
     for ws in tree.workspaces():
         # print('workspaces() num {} name [{}], focused {}'.format(ws.num, ws.name, ws.focused))
         update_workspace(ws, focused_ws)
+
+
+def get_all_active_workspaces(i3, focused_ws):
+    return [output.current_workspace for output in i3.get_outputs()
+            # if output.active and output.name not in output_blacklist]
+            if output.active and (focused_ws.name == output.current_workspace or output.name not in output_blacklist)]
 
 
 # ! Note calling this function will also store the current state in global_knowledge!
@@ -199,16 +219,17 @@ def tree_has_changed(ws):
         # add following if you want window title to be included in the state:
         # abs(hash(con.name)) % 10_000
         # or: hash(con.name) % 10_000  (if neg values are ok)
-        state += con.id % (con.rect.x + con.rect.y + con.rect.width + con.rect.height + hash(con.name) % 10_000 + f)
+        state += con.id % (con.rect.x + con.rect.y + con.rect.width +
+                           con.rect.height + hash(con.name) % 10_000 + f)
 
-    if global_knowledge[ws.num]['state'] == state:
+    if global_knowledge['wss'][ws.num]['state'] == state:
         return False
-    global_knowledge[ws.num]['state'] = state
+    global_knowledge['wss'][ws.num]['state'] = state
     return True
 
 
 def should_update_ws(rate_limit_period, ws, force):
-    if rate_limit_period is not None and time.time() - global_knowledge[ws.num]['last-update'] <= rate_limit_period:
+    if rate_limit_period is not None and time.time() - global_knowledge['wss'][ws.num]['last-update'] <= rate_limit_period:
         return False
     return tree_has_changed(ws) or force
 
@@ -224,7 +245,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     focused_con = tree.find_focused()
 
     if (not global_updates_running or
-        focused_con.window_class in blacklist_classes or
+        focused_con.window_class in win_class_blacklist or
         (only_focused_win and not e.container.focused)):  # note assumes WindowEvent
         #(only_focused_win and focused_con.id != event.container.id)  # note assumes WindowEvent
             print('] update skipped')
@@ -235,7 +256,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     workspaces = tree.workspaces()
 
     if all_active_ws:
-        active_ws_list = [output.current_workspace for output in i3.get_outputs() if output.active]  # TODO: cache on OutputEvent? or maybe we could use some 'visible' attr of a ws instead of querying for outputs?
+        active_ws_list = get_all_active_workspaces(i3, focused_ws)
         wss = [ws for ws in workspaces if ws.name in active_ws_list]
         updater_debounced.reset()
     else:  # update/process only the currently focused ws
@@ -245,7 +266,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     for ws in wss:
         update_workspace(ws, focused_ws)
         if should_update_ws(rate_limit_period, ws, force):
-            i = global_knowledge[ws.num]
+            i = global_knowledge['wss'][ws.num]
             t1 = time.time()
             i['screenshot'] = grab_screen(i)
             print('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
@@ -257,7 +278,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     # for ws in wss:
         # update_workspace(ws, focused_ws)
         # if should_update_ws(rate_limit_period, ws, force):
-            # i = global_knowledge[ws.num]
+            # i = global_knowledge['wss'][ws.num]
             # params += [i['x'], i['y'], i['w'], i['h']]
             # ws_to_process.append(i)
 
@@ -270,11 +291,6 @@ def update_state(i3, e=None, rate_limit_period=None,
             # ws_state['screenshot'] = screenshots[idx]
             # ws_state['last-update'] = t0
     # }
-
-    wspace_nums = [w.num for w in workspaces]
-    deleted = [n for n in global_knowledge if n not in wspace_nums and type(n) is int]  # TODO move n-keys to different map, so type(n)=int check wouldn't be necessary?
-    for n in deleted:
-        del global_knowledge[n]
 
     print('] whole update_state() took {}'.format(time.time()-t0))
 
@@ -300,7 +316,7 @@ def show_ui():
     pygame.display.init()
     pygame.font.init()
 
-    ws = global_knowledge[global_knowledge['active']]
+    ws = global_knowledge['wss'][global_knowledge['active']]
 
     screen = pygame.display.set_mode((ws['w'], ws['h']), pygame.RESIZABLE)
     pygame.display.set_caption('i3expo')
@@ -310,7 +326,7 @@ def show_ui():
     tiles = {}  # contains grid tile index to thumbnail/ws_screenshot data mappings
     active_tile = None
 
-    wss = [n for n in global_knowledge if type(n) is int]
+    wss = shown_ws()
     wss.sort()
 
     grid = []
@@ -339,7 +355,7 @@ def show_ui():
             tiles[index] = t
             row.append(t)
 
-            ws_conf = global_knowledge[ws_num]
+            ws_conf = global_knowledge['wss'][ws_num]
 
             if ws_conf['screenshot'] is not None:
                 # t0 = time.time()
@@ -414,7 +430,7 @@ def render_workspace_name(tile, screen, origin_x, origin_y, tile_w, tile_h):
         # check if name for given ws has been hardcoded in our config:
         name = config.get('CONF', 'workspace_' + str(tile['ws']))
     except:
-        name = global_knowledge[tile['ws']]['name']
+        name = global_knowledge['wss'][tile['ws']]['name']
 
     highlight_percentage = config.getint('CONF', 'highlight_percentage')
     names_color = config.getcolor('CONF', 'names_color')
@@ -461,7 +477,7 @@ def draw_grid(screen, grid):
             # origin_x = round((screen_w - len(row)*max_tile_w - (len(row)-1)*spacing_x)/2) + round((max_tile_w + spacing_x) * j)
             center_x = ((screen_w - len(row)*max_tile_w - (len(row)-1)*spacing_x)/2) + ((max_tile_w + spacing_x) * j) + max_tile_w/2
 
-            ws_conf = global_knowledge[t['ws']]
+            ws_conf = global_knowledge['wss'][t['ws']]
 
             if (screen_w > screen_h):
                 # height remains @ max
@@ -520,7 +536,7 @@ def resolve_grid_layout(screen_w, screen_h):
     max_tiles_per_row = 3 if screen_w >= screen_h else 2  # TODO: resolve from ratio?
 
     # TODO: need to start increasing max_nr_per_row as well from here?
-    l = len(global_knowledge) - 1
+    l = len(shown_ws())
     rows = math.ceil(l/max_tiles_per_row)
     while rows > 0:
         tiles_on_row = math.ceil(l/rows)
@@ -534,7 +550,7 @@ def resolve_grid_layout(screen_w, screen_h):
 def input_event_loop(screen, tiles, active_tile, grid):
     t1 = time.time()
     running = True
-    workspaces = len(global_knowledge) - 1
+    workspaces = len(shown_ws())
 
     while running and not global_updates_running and pygame.display.get_init():
         is_mouse_input = False
@@ -605,7 +621,7 @@ def input_event_loop(screen, tiles, active_tile, grid):
 
         if jump and active_tile is not None:
             target_ws_num = tiles[active_tile]['ws']
-            i3.command('workspace ' + str(global_knowledge[target_ws_num]['name']))
+            i3.command('workspace ' + str(global_knowledge['wss'][target_ws_num]['name']))
             break
 
         draw_tile_overlays(screen, active_tile, tiles)
@@ -641,18 +657,42 @@ def draw_tile_overlays(screen, active_tile, tiles):
         tiles[active_tile]['active'] = True
 
 
-# TODO: is listening to 'workspace' event even necessary, as window::focus is fired anyway?
-# only thing that it does is forcing immediate update, so it might be a good idea still...
 def on_ws(i3, e):
     global global_updates_running
 
-    global_updates_running = True  # make sure UI is closed on workspace switch
+    global_updates_running = True  # make sure UI is closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
 
-    # if e.change == 'rename':
-        # pass  # TODO: handle ws rename event!
-    # elif e.change == 'move':
+    print(' ---- on ws state: {}'.format(e.change))
+    focused_ws = i3.get_tree().find_focused().workspace()
 
-    update_state(i3, e, rate_limit_period=loop_interval, force=True)
+    # ops = [o for o in i3.get_outputs() if o.active]
+    # for output in ops:
+        # ws = next((k for k, v in global_knowledge['wss'].items() if v['name'] == output.current_workspace), None)
+        # ws['op'] = output.name
+        # # is_op_whitelisted = output.name not in output_blacklist or focused_ws.name == output.current_workspace
+        # ws['shown'] = output.name not in output_blacklist or focused_ws.name == output.current_workspace # last bit could be replaced by ws['name']
+        # # ws_knowledge['shown'] = ws_knowledge['op'] not in output_blacklist or focused_ws.name == output.current_workspace
+        # if focused_ws.name == output.name:
+            # global_knowledge['wss'][focused_ws.num]['op'] = output.name
+
+    for output in [o for o in i3.get_outputs() if o.active]:
+        for _, ws_knowledge in global_knowledge['wss'].items():
+            if ws_knowledge['name'] == output.current_workspace:
+                ws_knowledge['op'] = output.name
+                ws_knowledge['shown'] = output.name not in output_blacklist or focused_ws.name == output.current_workspace
+                break
+
+    # TODO: sure we want force=True?
+    ws_update_debounced(i3, e, rate_limit_period=loop_interval, force=True, debounced=True)
+
+
+def on_ws_empty(i3, e):
+    print(' ---- on ws EMPTY: {}'.format(e.change))
+
+    wspace_nums = [w.num for w in i3.get_tree().workspaces()]
+    deleted = [n for n in global_knowledge['wss'] if n not in wspace_nums]
+    for n in deleted:
+        del global_knowledge['wss'][n]
 
 
 def run():
@@ -661,6 +701,7 @@ def run():
     global config_file
     global grab
     global updater_debounced
+    global ws_update_debounced
 
     i3 = i3ipc.Connection()
 
@@ -672,6 +713,7 @@ def run():
     init_knowledge()
     updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
                                  partial(update_state, debounced=True))
+    ws_update_debounced = Debounce(0.15, update_state)
 
     screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
     grab = ctypes.CDLL(screenshot_lib_path)
@@ -691,7 +733,11 @@ def run():
     i3.on('window::fullscreen_mode', updater_debounced)
     i3.on('window::focus', updater_debounced)
     i3.on('window::title', partial(updater_debounced, only_focused_win=True))
-    i3.on('workspace', on_ws)
+    i3.on('workspace::focus', Debounce(0.1, on_ws))  # eg when moving a ws, then many ::focus events seem to be triggered
+    i3.on('workspace::init', on_ws)
+    i3.on('workspace::move', on_ws)
+    i3.on('workspace::restored', on_ws)
+    i3.on('workspace::empty', on_ws_empty)
     i3.on('shutdown', on_shutdown)
 
     i3_thread = Thread(target = i3.main)
