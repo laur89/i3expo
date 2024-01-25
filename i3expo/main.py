@@ -46,6 +46,7 @@ def shutdown_common():
     try:
         global_updates_running = False
         updater_debounced.reset()
+        ws_update_debounced.reset()
 
         pygame.display.quit()
         pygame.quit()
@@ -100,6 +101,7 @@ def signal_toggle_ui(signal, stack_frame):
         # i3.command('workspace i3expo-temporary-workspace')  # jump to temp ws; doesn't seem to work well in multimon setup; introduced by  https://gitlab.com/d.reis/i3expo/-/commit/d14685d16fd140b3a7374887ca086ea66e0388f5 - looks like it solves problem where fullscreen state is lost on expo toggle
         global_updates_running = False
         updater_debounced.reset()
+        ws_update_debounced.reset()
 
         # ui_thread = Thread(target = show_ui)
         # ui_thread.daemon = True
@@ -259,6 +261,7 @@ def update_state(i3, e=None, rate_limit_period=None,
         active_ws_list = get_all_active_workspaces(i3, focused_ws)
         wss = [ws for ws in workspaces if ws.name in active_ws_list]
         updater_debounced.reset()
+        ws_update_debounced.reset()
     else:  # update/process only the currently focused ws
         wss = [focused_ws]
 
@@ -595,12 +598,14 @@ def input_event_loop(screen, tiles, active_tile, grid):
                 jump = False  # make sure not to change workspace if we clicked between the tiles
         elif kbdmove is not None:
             if kbdmove[0] != 0:  # left-right movement
+                if active_tile is None: active_tile = 0
                 active_tile += kbdmove[0]
                 if active_tile > workspaces - 1:
                     active_tile = 0
                 elif active_tile < 0:
                     active_tile = workspaces - 1
             elif len(grid) > 1:  # up-down movement
+                if active_tile is None: active_tile = 0
                 current_row = tiles[active_tile]['row_idx']
                 if current_row == 0:  # we're currently on first row
                     no_of_tiles_on_target_row = grid[kbdmove[1]]
@@ -675,6 +680,7 @@ def on_ws(i3, e):
         # if focused_ws.name == output.name:
             # global_knowledge['wss'][focused_ws.num]['op'] = output.name
 
+    # TODO: output is also accessible under  ws.ipc_data['output'] (assuming you have ws handle)
     for output in [o for o in i3.get_outputs() if o.active]:
         for _, ws_knowledge in global_knowledge['wss'].items():
             if ws_knowledge['name'] == output.current_workspace:
@@ -708,7 +714,7 @@ def run():
     converters = {'color': get_color}
     config = configparser.ConfigParser(converters = converters)
     config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
-    hot_reload()  # reads config and inits other global var(s)
+    hot_reload()  # reads config and inits other global vars
 
     init_knowledge()
     updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
