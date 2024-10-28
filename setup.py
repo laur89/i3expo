@@ -41,18 +41,24 @@ def read_requirements(path):
 setup(
     name="i3expo",
     version=version,
-    description="i3expo",
+    description="display current i3 workspaces",
     url="https://github.com/laur89/i3expo",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
-    author="laur89",
+    author="Laur",
+    license="MIT",
     # packages=["i3expo"],
     packages=find_packages(exclude=["tests", ".github", "img"]),
     package_data={'i3expo': ['*.so']},
     # ext_modules=[prtscn_py],
+    # python_requires='>=3.7',
     install_requires=read_requirements("requirements.txt"),
     entry_points={
         "console_scripts": ["i3expo = i3expo:run"]
     },
     extras_require={"test": read_requirements("requirements-test.txt")},
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+    ]
 )
