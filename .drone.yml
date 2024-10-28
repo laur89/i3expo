@@ -6,14 +6,10 @@ name: default
 steps:
 # note zest does everything, including tagging!
 - name: version-tag-changelog
-  image: python:3-alpine
+  image: python:3-bookworm
   commands:
-  - apk add --no-cache git
-  - git config --global user.email "zest.releaser@example.com"
-  - git config --global user.name "Zest Releaser"
   - pip install zest.releaser
   - fullrelease --no-input
-  #- git push origin --tags
   when:
     branch:
     - master
@@ -23,8 +19,10 @@ steps:
   settings:
     ssh_key:
       from_secret: github_ssh_key
-    branch: "${DRONE_BRANCH}"
-    remote: "${DRONE_GIT_SSH_URL}"
+    #branch: "${DRONE_BRANCH}"
+    #remote: "${DRONE_GIT_SSH_URL}"
+    #remote: ssh://git@github.com/laur89/i3expo.git
+    remote: ssh://git@github.com/${DRONE_REPO}.git
     force: false
     followtags: true
   when:
@@ -34,6 +32,7 @@ steps:
 - name: build
   image: python:3-alpine
   commands:
+  #- python -m pip install --upgrade build
   - pip install build
   - python -m build
   # alternatively, using pipx instead of pip:
@@ -74,7 +73,7 @@ steps:
 trigger:
   ref:
   - refs/heads/master
-  - refs/heads/develop
+  #- refs/heads/develop
   - refs/heads/feature/*
   - refs/tags/*
 
