@@ -1,4 +1,7 @@
+include README.md
 include LICENSE
 include CHANGELOG.md
+include requirements*.txt
+include prtscn.c
 graft tests
 graft i3expo
