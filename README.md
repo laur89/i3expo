@@ -54,8 +54,9 @@ Recommended i3 config:
 ```
 
 Note the script depends on pre-compiled `i3expo/prtscn.so` for screen-grabbing. If
-it doesn't work you may want to compile `prtscn.c` yourself following the instruction
-in the file header.
+it doesn't work you may need to compile `prtscn.c` yourself following the instruction
+in the file header. In that case add `screenshot_lib_path` config item, pointing
+to the compiled prtscn executable.
 
 ## Limitations
 

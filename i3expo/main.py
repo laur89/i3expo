@@ -31,7 +31,6 @@ from xdg.BaseDirectory import xdg_config_home
 
 pp = pprint.PrettyPrinter(indent=4)
 
-screenshot_lib = 'prtscn.so'
 global_updates_running = True  # if false, we don't grab any screenshots/update internal state
 global_knowledge = {'active': -1, 'wss': {}}  # 'active' = currently active ws num
 
@@ -73,6 +72,7 @@ def hot_reload():
     global loop_interval
     global output_blacklist
     global win_class_blacklist
+    global grab
 
     read_config()
 
@@ -82,6 +82,10 @@ def hot_reload():
     loop_interval = config.getfloat('CONF', 'forced_update_interval_sec')
     output_blacklist = [x.strip() for x in config.get('CONF', 'output_blacklist').split(',') if x and x.strip()]
     win_class_blacklist = [x.strip() for x in config.get('CONF', 'win_class_blacklist').split(',') if x and x.strip()]
+
+    screenshot_lib_path = config.get('CONF', 'screenshot_lib_path')
+    grab = ctypes.CDLL(screenshot_lib_path)
+    grab.getScreen.argtypes = []
 
 
 def shown_ws():
@@ -105,7 +109,10 @@ def signal_toggle_ui(signal, stack_frame):
 
         # ui_thread = Thread(target = show_ui)
         # ui_thread.daemon = True
-        show_ui()
+        try:
+            show_ui()
+        except Exception:
+            pass
 
 
 def get_color(raw):
@@ -136,7 +143,8 @@ def read_config():
             'names_font'                 : 'verdana',  # list with pygame.font.get_fonts()
             'names_fontsize'             : 25,
             'names_color'                : 'white',
-            'highlight_percentage'       : 20
+            'highlight_percentage'       : 20,
+            'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so')
         }
     })
 
@@ -255,11 +263,10 @@ def update_state(i3, e=None, rate_limit_period=None,
 
     t0 = time.time()
     focused_ws = focused_con.workspace()
-    workspaces = tree.workspaces()
 
     if all_active_ws:
         active_ws_list = get_all_active_workspaces(i3, focused_ws)
-        wss = [ws for ws in workspaces if ws.name in active_ws_list]
+        wss = [ws for ws in tree.workspaces() if ws.name in active_ws_list]
         updater_debounced.reset()
         ws_update_debounced.reset()
     else:  # update/process only the currently focused ws
@@ -432,7 +439,7 @@ def render_workspace_name(tile, screen, origin_x, origin_y, tile_w, tile_h):
     try:
         # check if name for given ws has been hardcoded in our config:
         name = config.get('CONF', 'workspace_' + str(tile['ws']))
-    except:
+    except Exception:
         name = global_knowledge['wss'][tile['ws']]['name']
 
     highlight_percentage = config.getint('CONF', 'highlight_percentage')
@@ -705,7 +712,6 @@ def run():
     global i3
     global config
     global config_file
-    global grab
     global updater_debounced
     global ws_update_debounced
 
@@ -720,10 +726,6 @@ def run():
     updater_debounced = Debounce(config.getfloat('CONF', 'debounce_period_sec'),
                                  partial(update_state, debounced=True))
     ws_update_debounced = Debounce(0.15, update_state)
-
-    screenshot_lib_path = os.path.dirname(os.path.realpath(__file__)) + os.path.sep + screenshot_lib
-    grab = ctypes.CDLL(screenshot_lib_path)
-    grab.getScreen.argtypes = []
 
     signal.signal(signal.SIGINT, signal_quit)
     signal.signal(signal.SIGTERM, signal_quit)

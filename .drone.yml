@@ -8,7 +8,7 @@ steps:
 - name: version-tag-changelog
   image: python:3-bookworm
   commands:
-  - pip install zest.releaser
+  - pip install --no-cache-dir zest.releaser
   - fullrelease --no-input
   when:
     branch:
@@ -33,7 +33,7 @@ steps:
   image: python:3-alpine
   commands:
   #- python -m pip install --upgrade build
-  - pip install build
+  - pip --no-cache-dir install build
   - python -m build
   # alternatively, using pipx instead of pip:
   #- pipx install build
@@ -67,8 +67,7 @@ steps:
     - sdist
     - bdist_wheel
   when:
-    event:
-    - tag
+    event: tag
 
 trigger:
   ref:
