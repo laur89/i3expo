@@ -76,7 +76,7 @@ def hot_reload():
 
     read_config()
 
-    # TODO: compare previous & new output_blacklist & update ws knowledge! (e.g. the 'shown' field)
+    # TODO: compare previous & new output_blacklist & update ws knowledge!
 
     # re-define global vars populated from config:
     loop_interval = config.getfloat('CONF', 'forced_update_interval_sec')
@@ -89,11 +89,12 @@ def hot_reload():
 
 
 def shown_ws():
-    return [k for k, v in global_knowledge['wss'].items() if v['shown']]
+    focused_op = i3.get_tree().find_focused().workspace().ipc_data['output']
 
-
-def should_show_ui():
-    return len(shown_ws()) > 1
+    # print(f"global_knowledge: {[type(i['op']) for i in global_knowledge['wss'].values()]}")
+    # print(f"global_knowledge: {global_knowledge['wss']}")
+    return [k for k, v in global_knowledge['wss'].items()
+            if v['op'] not in output_blacklist or v['op'] == focused_op]
 
 
 def signal_toggle_ui(signal, stack_frame):
@@ -101,7 +102,10 @@ def signal_toggle_ui(signal, stack_frame):
 
     if not global_updates_running:  # UI toggle
         global_updates_running = True
-    elif should_show_ui():
+        return
+
+    wss = shown_ws()
+    if len(wss) > 1:  # i.e. should show UI
         # i3.command('workspace i3expo-temporary-workspace')  # jump to temp ws; doesn't seem to work well in multimon setup; introduced by  https://gitlab.com/d.reis/i3expo/-/commit/d14685d16fd140b3a7374887ca086ea66e0388f5 - looks like it solves problem where fullscreen state is lost on expo toggle
         global_updates_running = False
         updater_debounced.reset()
@@ -110,7 +114,7 @@ def signal_toggle_ui(signal, stack_frame):
         # ui_thread = Thread(target = show_ui)
         # ui_thread.daemon = True
         try:
-            show_ui()
+            show_ui(wss)
         except Exception:
             pass
 
@@ -174,7 +178,8 @@ def update_workspace(ws, focused_ws):
     i = global_knowledge['wss'].get(ws.num)
     if i is None:
         i = global_knowledge['wss'][ws.num] = {
-            'op'          : None,    # output
+            # 'op'          : None,    # output
+            'op'          : ws.ipc_data['output'],
             'name'        : '',
             'id'          : 0,
             'screenshot'  : None,  # byte-array representation of this ws screenshot
@@ -185,12 +190,12 @@ def update_workspace(ws, focused_ws):
             'w'           : 0,
             'h'           : 0,
             'ratio'       : 0.0,
-            'shown'       : not output_blacklist,  # whether this WS should be shown in the expo UI
             'windows'     : {}    # TODO unused atm
         }
 
     # always update dimensions; eg ws might've been moved onto a different output:
     i['name'] = ws.name
+    #i['op'] = ws.ipc_data['output']
     i['id'] = ws.id
     i['x'] = ws.rect.x
     i['y'] = ws.rect.y
@@ -204,8 +209,6 @@ def update_workspace(ws, focused_ws):
 
 
 def init_knowledge():
-    global outputs
-
     tree = i3.get_tree()
     focused_ws = tree.find_focused().workspace()
 
@@ -315,7 +318,7 @@ def get_hovered_tile(mpos, tiles):
     return None
 
 
-def show_ui():
+def show_ui(wss):
     global global_updates_running
 
     frame_active_color = config.getcolor('CONF', 'frame_active_color')
@@ -331,13 +334,13 @@ def show_ui():
     screen = pygame.display.set_mode((ws['w'], ws['h']), pygame.RESIZABLE)
     pygame.display.set_caption('i3expo')
 
-    grid_layout = resolve_grid_layout(ws['w'], ws['h'])
-
     tiles = {}  # contains grid tile index to thumbnail/ws_screenshot data mappings
     active_tile = None
 
-    wss = shown_ws()
     wss.sort()
+    wss2 = list(wss)  # shallow copy
+
+    grid_layout = resolve_grid_layout(ws['w'], ws['h'], wss2)
 
     grid = []
 
@@ -384,7 +387,7 @@ def show_ui():
 
     draw_grid(screen, grid)
     pygame.display.flip()  # update full dispaly Surface on the screen
-    input_event_loop(screen, tiles, active_tile, grid_layout)
+    input_event_loop(screen, tiles, active_tile, grid_layout, wss2)
     pygame.display.quit()
     pygame.quit()
     global_updates_running = True
@@ -541,12 +544,12 @@ def draw_grid(screen, grid):
             t['mouseoff'] = mouseoff
 
 
-def resolve_grid_layout(screen_w, screen_h):
+def resolve_grid_layout(screen_w, screen_h, wss):
     grid = []
     max_tiles_per_row = 3 if screen_w >= screen_h else 2  # TODO: resolve from ratio?
 
     # TODO: need to start increasing max_nr_per_row as well from here?
-    l = len(shown_ws())
+    l = len(wss)
     rows = math.ceil(l/max_tiles_per_row)
     while rows > 0:
         tiles_on_row = math.ceil(l/rows)
@@ -557,10 +560,10 @@ def resolve_grid_layout(screen_w, screen_h):
     return grid
 
 
-def input_event_loop(screen, tiles, active_tile, grid):
+def input_event_loop(screen, tiles, active_tile, grid, wss):
     t1 = time.time()
     running = True
-    workspaces = len(shown_ws())
+    workspaces = len(wss)
 
     while running and not global_updates_running and pygame.display.get_init():
         is_mouse_input = False
@@ -674,26 +677,28 @@ def on_ws(i3, e):
 
     global_updates_running = True  # make sure UI is closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
 
-    print(' ---- on ws state: {}'.format(e.change))
-    focused_ws = i3.get_tree().find_focused().workspace()
+    print(' ---- on ws state: {}, num: {}'.format(e.change, e.current.num))
+    gk = global_knowledge['wss']
+    # focused_ws = i3.get_tree().find_focused().workspace()
 
     # ops = [o for o in i3.get_outputs() if o.active]
     # for output in ops:
-        # ws = next((k for k, v in global_knowledge['wss'].items() if v['name'] == output.current_workspace), None)
+        # ws = next((k for k, v in gk.items() if v['name'] == output.current_workspace), None)
         # ws['op'] = output.name
         # # is_op_whitelisted = output.name not in output_blacklist or focused_ws.name == output.current_workspace
-        # ws['shown'] = output.name not in output_blacklist or focused_ws.name == output.current_workspace # last bit could be replaced by ws['name']
-        # # ws_knowledge['shown'] = ws_knowledge['op'] not in output_blacklist or focused_ws.name == output.current_workspace
         # if focused_ws.name == output.name:
-            # global_knowledge['wss'][focused_ws.num]['op'] = output.name
+            # gk[focused_ws.num]['op'] = output.name
 
-    # TODO: output is also accessible under  ws.ipc_data['output'] (assuming you have ws handle)
-    for output in [o for o in i3.get_outputs() if o.active]:
-        for _, ws_knowledge in global_knowledge['wss'].items():
-            if ws_knowledge['name'] == output.current_workspace:
-                ws_knowledge['op'] = output.name
-                ws_knowledge['shown'] = output.name not in output_blacklist or focused_ws.name == output.current_workspace
-                break
+    # or:
+    # for output in [o for o in i3.get_outputs() if o.active]:
+        # for _, ws_knowledge in gk.items():
+            # if ws_knowledge['name'] == output.current_workspace:
+                # ws_knowledge['op'] = output.name
+                # break
+
+    # or:
+    if e.current.num in gk:
+        gk[e.current.num]['op'] = e.current.ipc_data['output']
 
     # TODO: sure we want force=True?
     ws_update_debounced(i3, e, rate_limit_period=loop_interval, force=True, debounced=True)

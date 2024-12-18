@@ -1,7 +1,8 @@
 ## 0.0.2 (unreleased)
 
 
-- Nothing changed yet.
+- fix output_blacklist config logic
+- add screenshot_lib_path config item
 
 
 ## 0.0.1 (2024-10-28)
