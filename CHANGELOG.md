@@ -1,4 +1,4 @@
-## 0.0.2 (unreleased)
+## 0.0.2 (2025-02-05)
 
 
 - fix output_blacklist config logic
