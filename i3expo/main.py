@@ -25,6 +25,8 @@ from threading import Thread
 from PIL import Image, ImageDraw
 import pulp
 import ctypes
+import pickle
+from datetime import datetime
 # import prtscn_py
 
 from xdg.BaseDirectory import xdg_config_home
@@ -32,9 +34,9 @@ from xdg.BaseDirectory import xdg_config_home
 pp = pprint.PrettyPrinter(indent=4)
 
 global_updates_running = True  # if false, we don't grab any screenshots/update internal state
-global_knowledge = {'active': -1, 'wss': {}}  # 'active' = currently active ws num
 
 qm_cache = {}  # screen_w x screen_h mapped against rendered question mark
+TIME_DIFF_DELTA_THRESHOLD_S = 2
 
 
 def shutdown_common():
@@ -58,9 +60,61 @@ def signal_quit(signal, stack_frame):
     shutdown_common()
 
 
+def load_global_knowledge() -> dict:
+    default = {'active': -1, 'wss': {}}  # 'active' = currently active ws num
+
+    ff = config.get('CONF', 'state_f')
+    if not (os.path.isfile(ff) and os.access(ff, os.R_OK)):
+        return default
+
+    try:
+        with open(ff, 'rb') as f:
+            s = pickle.load(f)
+            t = s.get('timestamp', 0)
+
+            if (_unix_time_now() - t <= TIME_DIFF_DELTA_THRESHOLD_S):
+                s = s.get('state', default)
+                for k, v in s['wss'].items():
+                    i = v['screenshot']
+                    if i is not None:
+                        v['screenshot'] = (ctypes.c_ubyte * v['w'] * v['h'] * 3).from_buffer(i)
+                # pp.pprint(s)
+                return s
+    except Exception as e:
+        print(e)
+    return default
+
+
+def persist_state():
+    global global_updates_running
+
+    global_updates_running = False
+
+    try:
+        pp.pprint(global_knowledge)
+        for k, v in global_knowledge['wss'].items():
+            i = v['screenshot']
+            if i is not None:
+                v['screenshot'] = bytearray(i)
+
+        data = {
+                'timestamp': _unix_time_now(),
+                'state': global_knowledge
+                }
+
+        with open(config.get('CONF', 'state_f'), 'wb') as f:
+            pickle.dump(data, f)
+    except Exception as e:
+        print(e)
+
+
+def _unix_time_now() -> int:
+    return int(datetime.now().timestamp())
+
+
 def on_shutdown(i3conn, e):
-    # if e.change == 'restart':
-        # self.persist_state()
+    if e.change == 'restart' and config.get('CONF', 'store_state_on_restart'):
+        persist_state()
     shutdown_common()
 
 
@@ -115,7 +169,8 @@ def signal_toggle_ui(signal, stack_frame):
         # ui_thread.daemon = True
         try:
             show_ui(wss)
-        except Exception:
+        except Exception as e:
+            # print(e)
             pass
 
 
@@ -148,7 +203,9 @@ def read_config():
             'names_fontsize'             : 25,
             'names_color'                : 'white',
             'highlight_percentage'       : 20,
-            'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so')
+            'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so'),
+            'store_state_on_restart'     : True,
+            'state_f'                    : '/tmp/.i3expo.state'
         }
     })
 
@@ -174,7 +231,7 @@ def grab_screen(i):
     return result
 
 
-def update_workspace(ws, focused_ws):
+def update_workspace(ws, focused_ws, hydration=False):
     i = global_knowledge['wss'].get(ws.num)
     if i is None:
         i = global_knowledge['wss'][ws.num] = {
@@ -193,15 +250,20 @@ def update_workspace(ws, focused_ws):
             'windows'     : {}    # TODO unused atm
         }
 
-    # always update dimensions; eg ws might've been moved onto a different output:
+    # some data should not be set on first state hydration, e.g. missing polybar
+    # on initial restart causes different w & h values than our loaded data,
+    # causing error on render
+    if not hydration:
+        # always update dimensions; eg ws might've been moved onto a different output:
+        i['x'] = ws.rect.x
+        i['y'] = ws.rect.y
+        i['w'] = ws.rect.width
+        i['h'] = ws.rect.height
+        i['ratio'] = ws.rect.width / ws.rect.height
+
     i['name'] = ws.name
     #i['op'] = ws.ipc_data['output']
     i['id'] = ws.id
-    i['x'] = ws.rect.x
-    i['y'] = ws.rect.y
-    i['w'] = ws.rect.width
-    i['h'] = ws.rect.height
-    i['ratio'] = ws.rect.width / ws.rect.height
 
     if ws.id == focused_ws.id:
         # print('active WS:: {}'.format(ws.name))
@@ -209,12 +271,17 @@ def update_workspace(ws, focused_ws):
 
 
 def init_knowledge():
+    global global_knowledge
+
+    global_knowledge = load_global_knowledge()
+    state_hydration = global_knowledge['active'] != -1
+
     tree = i3.get_tree()
     focused_ws = tree.find_focused().workspace()
 
     for ws in tree.workspaces():
         # print('workspaces() num {} name [{}], focused {}'.format(ws.num, ws.name, ws.focused))
-        update_workspace(ws, focused_ws)
+        update_workspace(ws, focused_ws, state_hydration)
 
 
 def get_all_active_workspaces(i3, focused_ws):
