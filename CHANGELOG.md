@@ -1,3 +1,9 @@
+## 0.0.4 (unreleased)
+
+
+- Nothing changed yet.
+
+
 ## 0.0.3 (2025-03-10)
 
 - persist and restore state on i3 restarts
