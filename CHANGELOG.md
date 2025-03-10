@@ -1,4 +1,4 @@
-## 0.0.3 (unreleased)
+## 0.0.3 (2025-03-10)
 
 - persist and restore state on i3 restarts
 
