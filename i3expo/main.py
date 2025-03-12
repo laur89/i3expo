@@ -77,7 +77,7 @@ def load_global_knowledge() -> dict:
                 for k, v in s['wss'].items():
                     i = v['screenshot']
                     if i is not None:
-                        v['screenshot'] = (ctypes.c_ubyte * v['w'] * v['h'] * 3).from_buffer(i)
+                        v['screenshot'] = (ctypes.c_ubyte * len(i)).from_buffer(i)
                 # pp.pprint(s)
                 return s
     except Exception as e:
@@ -91,7 +91,7 @@ def persist_state():
     global_updates_running = False
 
     try:
-        pp.pprint(global_knowledge)
+        # pp.pprint(global_knowledge)
         for k, v in global_knowledge['wss'].items():
             i = v['screenshot']
             if i is not None:
