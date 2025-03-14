@@ -1,7 +1,8 @@
 ## 0.0.4 (unreleased)
 
 
-- Nothing changed yet.
+- lock process to guarantee single instance
+- store screenshot with its dimensions, so it's never ambiguous on usage
 
 
 ## 0.0.3 (2025-03-10)

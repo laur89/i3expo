@@ -8,3 +8,4 @@ pulp
 i3ipc
 pyxdg
 Pillow
+tendo

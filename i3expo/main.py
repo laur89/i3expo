@@ -27,6 +27,7 @@ import pulp
 import ctypes
 import pickle
 from datetime import datetime
+from tendo import singleton
 # import prtscn_py
 
 from xdg.BaseDirectory import xdg_config_home
@@ -35,8 +36,8 @@ pp = pprint.PrettyPrinter(indent=4)
 
 global_updates_running = True  # if false, we don't grab any screenshots/update internal state
 
-qm_cache = {}  # screen_w x screen_h mapped against rendered question mark
-TIME_DIFF_DELTA_THRESHOLD_S = 2
+qm_cache = {}  # screen_w x screen_h mapped against rendered question mark for missing tiles
+LOCK = singleton.SingleInstance()
 
 
 def shutdown_common():
@@ -48,15 +49,19 @@ def shutdown_common():
         global_updates_running = False
         updater_debounced.reset()
         ws_update_debounced.reset()
+        i3.main_quit()
 
         pygame.display.quit()
         pygame.quit()
+    except Exception as e:
+        print('exception on shutdown:')
+        print(e)
     finally:
         os._exit(0)
 
 
 def signal_quit(signal, stack_frame):
-    i3.main_quit()
+    # i3.main_quit()
     shutdown_common()
 
 
@@ -72,14 +77,8 @@ def load_global_knowledge() -> dict:
             s = pickle.load(f)
             t = s.get('timestamp', 0)
 
-            if (_unix_time_now() - t <= TIME_DIFF_DELTA_THRESHOLD_S):
-                s = s.get('state', default)
-                for k, v in s['wss'].items():
-                    i = v['screenshot']
-                    if i is not None:
-                        v['screenshot'] = (ctypes.c_ubyte * len(i)).from_buffer(i)
-                # pp.pprint(s)
-                return s
+            if (_unix_time_now() - t <= config.getint('CONF', 'max_persisted_state_age_sec')):
+                return s.get('state', default)
     except Exception as e:
         print(e)
     return default
@@ -94,8 +93,9 @@ def persist_state():
         # pp.pprint(global_knowledge)
         for k, v in global_knowledge['wss'].items():
             i = v['screenshot']
-            if i is not None:
-                v['screenshot'] = bytearray(i)
+            # in order to pickle ctypes data, convert it into bytearray:
+            if i:
+                v['screenshot'][2] = bytearray(i[2])
 
         data = {
                 'timestamp': _unix_time_now(),
@@ -113,7 +113,7 @@ def _unix_time_now() -> int:
 
 
 def on_shutdown(i3conn, e):
-    if e.change == 'restart' and config.get('CONF', 'store_state_on_restart'):
+    if e.change == 'restart' and config.getboolean('CONF', 'store_state_on_restart'):
         persist_state()
     shutdown_common()
 
@@ -205,6 +205,7 @@ def read_config():
             'highlight_percentage'       : 20,
             'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so'),
             'store_state_on_restart'     : True,
+            'max_persisted_state_age_sec': 2,
             'state_f'                    : '/tmp/.i3expo.state'
         }
     })
@@ -228,18 +229,17 @@ def grab_screen(i):
 
     result = (ctypes.c_ubyte * w * h * 3)()  # *3 for R,G,B
     grab.getScreen(i['x'], i['y'], w, h, result)
-    return result
+    return [w, h, result]
 
 
 def update_workspace(ws, focused_ws, hydration=False):
     i = global_knowledge['wss'].get(ws.num)
     if i is None:
         i = global_knowledge['wss'][ws.num] = {
-            # 'op'          : None,    # output
             'op'          : ws.ipc_data['output'],
-            'name'        : '',
-            'id'          : 0,
-            'screenshot'  : None,  # byte-array representation of this ws screenshot
+            'name'        : ws.name,
+            'id'          : ws.id,
+            'screenshot'  : [],    # array of [w,h,byte-array representation of this ws screenshot]
             'last-update' : 0.0,   # unix epoch when ws was last grabbed
             'state'       : 0,     # numeric representation of current state of ws - windows and their sizes/is focused et al
             'x'           : 0,
@@ -253,17 +253,17 @@ def update_workspace(ws, focused_ws, hydration=False):
     # some data should not be set on first state hydration, e.g. missing polybar
     # on initial restart causes different w & h values than our loaded data,
     # causing error on render
-    if not hydration:
+    if hydration:
+        i['id'] = ws.id
+        i['name'] = ws.name
+        #i['op'] = ws.ipc_data['output']
+    else:
         # always update dimensions; eg ws might've been moved onto a different output:
         i['x'] = ws.rect.x
         i['y'] = ws.rect.y
         i['w'] = ws.rect.width
         i['h'] = ws.rect.height
         i['ratio'] = ws.rect.width / ws.rect.height
-
-    i['name'] = ws.name
-    #i['op'] = ws.ipc_data['output']
-    i['id'] = ws.id
 
     if ws.id == focused_ws.id:
         # print('active WS:: {}'.format(ws.name))
@@ -292,7 +292,7 @@ def get_all_active_workspaces(i3, focused_ws):
 
 # ! Note calling this function will also store the current state in global_knowledge!
 # TODO: this will likely be deprecated when/if i3 implements 'resize' event. actually... we now also track window title changes.
-def tree_has_changed(ws):
+def update_tree_state(ws):
     state = 0
     for con in ws.leaves():
         f = 31 if con.focused else 0  # so focus change can be detected
@@ -311,7 +311,7 @@ def tree_has_changed(ws):
 def should_update_ws(rate_limit_period, ws, force):
     if rate_limit_period is not None and time.time() - global_knowledge['wss'][ws.num]['last-update'] <= rate_limit_period:
         return False
-    return tree_has_changed(ws) or force
+    return update_tree_state(ws) or force
 
 
 def update_state(i3, e=None, rate_limit_period=None,
@@ -437,9 +437,9 @@ def show_ui(wss):
 
             ws_conf = global_knowledge['wss'][ws_num]
 
-            if ws_conf['screenshot'] is not None:
+            if ws_conf['screenshot']:
                 # t0 = time.time()
-                t['img'] = process_img(ws_conf)
+                t['img'] = process_img(ws_conf['screenshot'])
                 # print('processing image took {}'.format(time.time()-t0))
                 if global_knowledge['active'] == ws_num:
                     active_tile = index  # first highlight our current ws
@@ -460,8 +460,8 @@ def show_ui(wss):
     global_updates_running = True
 
 
-def process_img(ws_conf):
-    pil = Image.frombuffer('RGB', (ws_conf['w'], ws_conf['h']), ws_conf['screenshot'], 'raw', 'RGB', 0, 1)
+def process_img(shot):
+    pil = Image.frombuffer('RGB', (shot[0], shot[1]), shot[2], 'raw', 'RGB', 0, 1)
     # return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode)
     return pygame.image.frombuffer(pil.tobytes(), pil.size, pil.mode)  # frombuffer() potentially faster than .fromstring()
 
@@ -611,7 +611,7 @@ def draw_grid(screen, grid):
             t['mouseoff'] = mouseoff
 
 
-def resolve_grid_layout(screen_w, screen_h, wss):
+def resolve_grid_layout(screen_w, screen_h, wss) -> list[int]:
     grid = []
     max_tiles_per_row = 3 if screen_w >= screen_h else 2  # TODO: resolve from ratio?
 
@@ -780,6 +780,13 @@ def on_ws_empty(i3, e):
         del global_knowledge['wss'][n]
 
 
+def on_ws_rename(i3, e):
+    print(' ---- on ws RENAME: {}'.format(e.change))
+    gk = global_knowledge['wss']
+    if e.current.num in gk:
+        gk[e.current.num]['name'] = e.current.name
+
+
 def run():
     global i3
     global config
@@ -818,6 +825,7 @@ def run():
     i3.on('workspace::move', on_ws)
     i3.on('workspace::restored', on_ws)
     i3.on('workspace::empty', on_ws_empty)
+    i3.on('workspace::rename', on_ws_rename)
     i3.on('shutdown', on_shutdown)
 
     i3_thread = Thread(target = i3.main)
