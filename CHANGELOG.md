@@ -1,4 +1,4 @@
-## 0.0.4 (unreleased)
+## 0.0.4 (2025-03-15)
 
 
 - lock process to guarantee single instance

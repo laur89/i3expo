@@ -5,7 +5,7 @@ from setuptools import find_packages, setup#, Extension
 
 
 # note the version is managed by zest.releaser:
-version = "0.0.4.dev0"
+version = "0.0.4"
 
 
 # prtscn_py = Extension(
