@@ -210,16 +210,15 @@ def read_config():
         }
     })
 
-    # write config file down if not existing:
-    root_dir = os.path.dirname(config_file)
-    if not os.path.exists(root_dir):
-        os.makedirs(root_dir)
-
     if os.path.exists(config_file):
         config.read(config_file)
-    else:
-        with open(config_file, 'w') as f:
-            config.write(f)
+    # else:
+        # # write config file down if not existing:
+        # root_dir = os.path.dirname(config_file)
+        # if not os.path.exists(root_dir):
+            # os.makedirs(root_dir)
+        # with open(config_file, 'w') as f:
+            # config.write(f)
 
 
 def grab_screen(i):
@@ -295,7 +294,7 @@ def get_all_active_workspaces(i3, focused_ws):
 def update_tree_state(ws):
     state = 0
     for con in ws.leaves():
-        f = 31 if con.focused else 0  # so focus change can be detected
+        f = 31 if con.focused else 0  # so window focus change can be detected
         # add following if you want window title to be included in the state:
         # abs(hash(con.name)) % 10_000
         # or: hash(con.name) % 10_000  (if neg values are ok)
@@ -308,8 +307,8 @@ def update_tree_state(ws):
     return True
 
 
-def should_update_ws(rate_limit_period, ws, force):
-    if rate_limit_period is not None and time.time() - global_knowledge['wss'][ws.num]['last-update'] <= rate_limit_period:
+def should_update_ws(rate_limit_period, ws, t, force):
+    if rate_limit_period is not None and t - global_knowledge['wss'][ws.num]['last-update'] <= rate_limit_period:
         return False
     return update_tree_state(ws) or force
 
@@ -345,7 +344,7 @@ def update_state(i3, e=None, rate_limit_period=None,
     # either use our legacy grabbing logic...: {
     for ws in wss:
         update_workspace(ws, focused_ws)
-        if should_update_ws(rate_limit_period, ws, force):
+        if should_update_ws(rate_limit_period, ws, t0, force):
             i = global_knowledge['wss'][ws.num]
             t1 = time.time()
             i['screenshot'] = grab_screen(i)
