@@ -9,6 +9,7 @@
 #   bindsym $mod1+e exec --no-startup-id killall -s SIGUSR1 i3expo
 
 import os
+import sys
 import configparser
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # needs to be set prior to importing pygame; see https://github.com/pygame/pygame/issues/1468
 import pygame
@@ -19,6 +20,7 @@ import traceback
 import pprint
 import time
 import math
+import logging
 from .debounce import Debounce
 from functools import partial
 from threading import Thread
@@ -43,7 +45,7 @@ LOCK = singleton.SingleInstance()
 def shutdown_common():
     global global_updates_running
 
-    print('Shutting down...')
+    logger.info('Shutting down...')
 
     try:
         global_updates_running = False
@@ -54,8 +56,8 @@ def shutdown_common():
         pygame.display.quit()
         pygame.quit()
     except Exception as e:
-        print('exception on shutdown:')
-        print(e)
+        logger.error('exception on shutdown:')
+        logger.error(e)
     finally:
         os._exit(0)
 
@@ -80,7 +82,7 @@ def load_global_knowledge() -> dict:
             if (_unix_time_now() - t <= config.getint('CONF', 'max_persisted_state_age_sec')):
                 return s.get('state', default)
     except Exception as e:
-        print(e)
+        logger.error(e)
     return default
 
 
@@ -105,7 +107,7 @@ def persist_state():
         with open(config.get('CONF', 'state_f'), 'wb') as f:
             pickle.dump(data, f)
     except Exception as e:
-        print(e)
+        logger.error(e)
 
 
 def _unix_time_now() -> int:
@@ -130,6 +132,9 @@ def hot_reload():
 
     read_config()
 
+    log_lvl = getattr(logging, config.get('CONF', 'log_lvl'))
+    logging.basicConfig(stream=sys.stdout, level=log_lvl)
+
     # TODO: compare previous & new output_blacklist & update ws knowledge!
 
     # re-define global vars populated from config:
@@ -145,8 +150,8 @@ def hot_reload():
 def shown_ws():
     focused_op = i3.get_tree().find_focused().workspace().ipc_data['output']
 
-    # print(f"global_knowledge: {[type(i['op']) for i in global_knowledge['wss'].values()]}")
-    # print(f"global_knowledge: {global_knowledge['wss']}")
+    # logger.debug(f"global_knowledge: {[type(i['op']) for i in global_knowledge['wss'].values()]}")
+    # logger.debug(f"global_knowledge: {global_knowledge['wss']}")
     return [k for k, v in global_knowledge['wss'].items()
             if v['op'] not in output_blacklist or v['op'] == focused_op]
 
@@ -170,7 +175,7 @@ def signal_toggle_ui(signal, stack_frame):
         try:
             show_ui(wss)
         except Exception as e:
-            # print(e)
+            # logger.error(e)
             pass
 
 
@@ -206,7 +211,8 @@ def read_config():
             'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so'),
             'store_state_on_restart'     : True,
             'max_persisted_state_age_sec': 2,
-            'state_f'                    : '/tmp/.i3expo.state'
+            'state_f'                    : '/tmp/.i3expo.state',
+            'log_lvl'                    : 'INFO'
         }
     })
 
@@ -222,7 +228,7 @@ def read_config():
 
 
 def grab_screen(i):
-    # print('GRABBING FOR: {}'.format(i['name']))
+    # logger.debug('GRABBING FOR: {}'.format(i['name']))
     w = i['w']
     h = i['h']
 
@@ -265,7 +271,7 @@ def update_workspace(ws, focused_ws, hydration=False):
         i['ratio'] = ws.rect.width / ws.rect.height
 
     if ws.id == focused_ws.id:
-        # print('active WS:: {}'.format(ws.name))
+        # logger.debug('active WS:: {}'.format(ws.name))
         global_knowledge['active'] = ws.num
 
 
@@ -279,7 +285,7 @@ def init_knowledge():
     focused_ws = tree.find_focused().workspace()
 
     for ws in tree.workspaces():
-        # print('workspaces() num {} name [{}], focused {}'.format(ws.num, ws.name, ws.focused))
+        # logger.debug('workspaces() num {} name [{}], focused {}'.format(ws.num, ws.name, ws.focused))
         update_workspace(ws, focused_ws, state_hydration)
 
 
@@ -316,7 +322,7 @@ def should_update_ws(rate_limit_period, ws, t, force):
 def update_state(i3, e=None, rate_limit_period=None,
                  force=False, debounced=False,
                  all_active_ws=False, only_focused_win=False):
-    print('[ TOGGLING updat_state(){}; force: {}, debounced: {}'.format(' by event [' + e.change + ']' if e else '', force, debounced))
+    logger.debug('[ TOGGLING updat_state(){}; force: {}, debounced: {}'.format(' by event [' + e.change + ']' if e else '', force, debounced))
 
     time.sleep(0.2)  # TODO system-specific; configurize? also, maybe only sleep if it's _not_ debounced?
 
@@ -327,7 +333,7 @@ def update_state(i3, e=None, rate_limit_period=None,
         focused_con.window_class in win_class_blacklist or
         (only_focused_win and not e.container.focused)):  # note assumes WindowEvent
         #(only_focused_win and focused_con.id != event.container.id)  # note assumes WindowEvent
-            print('] update skipped')
+            logger.debug('] update skipped')
             return
 
     t0 = time.time()
@@ -348,7 +354,7 @@ def update_state(i3, e=None, rate_limit_period=None,
             i = global_knowledge['wss'][ws.num]
             t1 = time.time()
             i['screenshot'] = grab_screen(i)
-            print('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
+            logger.debug('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
             i['last-update'] = t0
 
     # } ...or new py-bindings: {  # this seems to be slower, for whatever the reason
@@ -364,14 +370,14 @@ def update_state(i3, e=None, rate_limit_period=None,
     # if params:
         # t1 = time.time()
         # screenshots = prtscn_py.get_screens(*params)
-        # print('  -> grabbing {} WS{} took {}'.format(len(ws_to_process), 'es' if len(ws_to_process) > 1 else '', time.time()-t1))
+        # logger.debug('  -> grabbing {} WS{} took {}'.format(len(ws_to_process), 'es' if len(ws_to_process) > 1 else '', time.time()-t1))
 
         # for idx, ws_state in enumerate(ws_to_process):
             # ws_state['screenshot'] = screenshots[idx]
             # ws_state['last-update'] = t0
     # }
 
-    print('] whole update_state() took {}'.format(time.time()-t0))
+    logger.debug('] whole update_state() took {}'.format(time.time()-t0))
 
 
 def get_hovered_tile(mpos, tiles):
@@ -439,7 +445,7 @@ def show_ui(wss):
             if ws_conf['screenshot']:
                 # t0 = time.time()
                 t['img'] = process_img(ws_conf['screenshot'])
-                # print('processing image took {}'.format(time.time()-t0))
+                # logger.debug('processing image took {}'.format(time.time()-t0))
                 if global_knowledge['active'] == ws_num:
                     active_tile = index  # first highlight our current ws
                     t['frame_col'] = frame_active_color
@@ -743,7 +749,7 @@ def on_ws(i3, e):
 
     global_updates_running = True  # make sure UI is closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
 
-    print(' ---- on ws state: {}, num: {}'.format(e.change, e.current.num))
+    logger.debug(' ---- on ws state: {}, num: {}'.format(e.change, e.current.num))
     gk = global_knowledge['wss']
     # focused_ws = i3.get_tree().find_focused().workspace()
 
@@ -771,7 +777,7 @@ def on_ws(i3, e):
 
 
 def on_ws_empty(i3, e):
-    print(' ---- on ws EMPTY: {}'.format(e.change))
+    logger.debug(' ---- on ws EMPTY: {}'.format(e.change))
 
     wspace_nums = [w.num for w in i3.get_tree().workspaces()]
     deleted = [n for n in global_knowledge['wss'] if n not in wspace_nums]
@@ -780,7 +786,7 @@ def on_ws_empty(i3, e):
 
 
 def on_ws_rename(i3, e):
-    print(' ---- on ws RENAME: {}'.format(e.change))
+    logger.debug(' ---- on ws RENAME: {}'.format(e.change))
     gk = global_knowledge['wss']
     if e.current.num in gk:
         gk[e.current.num]['name'] = e.current.name
@@ -792,6 +798,9 @@ def run():
     global config_file
     global updater_debounced
     global ws_update_debounced
+    global logger
+
+    logger = logging.getLogger(__name__)
 
     i3 = i3ipc.Connection()
 
