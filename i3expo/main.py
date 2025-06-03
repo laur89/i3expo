@@ -68,19 +68,19 @@ def signal_quit(signal, stack_frame):
 
 
 def load_global_knowledge() -> dict:
-    default = {'active': -1, 'wss': {}}  # 'active' = currently active ws num
+    default = {'active': -1, 'prev_f_w': None, 'wss': {}}  # 'active' = currently active ws num
 
-    ff = config.get('CONF', 'state_f')
-    if not (os.path.isfile(ff) and os.access(ff, os.R_OK)):
+    state_f = config.get('CONF', 'state_f')
+    if not (os.path.isfile(state_f) and os.access(state_f, os.R_OK)):
         return default
 
     try:
-        with open(ff, 'rb') as f:
+        with open(state_f, 'rb') as f:
             s = pickle.load(f)
             t = s.get('timestamp', 0)
 
             if (_unix_time_now() - t <= config.getint('CONF', 'max_persisted_state_age_sec')):
-                return s.get('state', default)
+                return s.get('gknowledge', default)
     except Exception as e:
         logger.error(e)
     return default
@@ -100,9 +100,9 @@ def persist_state():
                 v['screenshot'][2] = bytearray(i[2])
 
         data = {
-                'timestamp': _unix_time_now(),
-                'state': global_knowledge
-                }
+                'timestamp':  _unix_time_now(),
+                'gknowledge': global_knowledge
+               }
 
         with open(config.get('CONF', 'state_f'), 'wb') as f:
             pickle.dump(data, f)
@@ -237,7 +237,7 @@ def grab_screen(i):
     return [w, h, result]
 
 
-def update_workspace(ws, focused_ws, hydration=False):
+def update_workspace(ws, focused_ws, hydration=False) -> dict:
     i = global_knowledge['wss'].get(ws.num)
     if i is None:
         i = global_knowledge['wss'][ws.num] = {
@@ -273,6 +273,7 @@ def update_workspace(ws, focused_ws, hydration=False):
     if ws.id == focused_ws.id:
         # logger.debug('active WS:: {}'.format(ws.name))
         global_knowledge['active'] = ws.num
+    return i
 
 
 def init_knowledge():
@@ -289,6 +290,8 @@ def init_knowledge():
         update_workspace(ws, focused_ws, state_hydration)
 
 
+# TODO: instead of querying i3.get_outputs(), consider subscribing to 'output' event
+#       and maintaining internal output list/state
 def get_all_active_workspaces(i3, focused_ws):
     return [output.current_workspace for output in i3.get_outputs()
             # if output.active and output.name not in output_blacklist]
@@ -297,7 +300,7 @@ def get_all_active_workspaces(i3, focused_ws):
 
 # ! Note calling this function will also store the current state in global_knowledge!
 # TODO: this will likely be deprecated when/if i3 implements 'resize' event. actually... we now also track window title changes.
-def update_tree_state(ws):
+def update_tree_state(ws, wk):
     state = 0
     for con in ws.leaves():
         f = 31 if con.focused else 0  # so window focus change can be detected
@@ -307,21 +310,21 @@ def update_tree_state(ws):
         state += con.id % (con.rect.x + con.rect.y + con.rect.width +
                            con.rect.height + hash(con.name) % 10_000 + f)
 
-    if global_knowledge['wss'][ws.num]['state'] == state:
+    if wk['state'] == state:
         return False
-    global_knowledge['wss'][ws.num]['state'] = state
+    wk['state'] = state
     return True
 
 
-def should_update_ws(rate_limit_period, ws, t, force):
-    if rate_limit_period is not None and t - global_knowledge['wss'][ws.num]['last-update'] <= rate_limit_period:
+def should_update_ws(rate_limit_period, ws, wk, t, force):
+    if rate_limit_period is not None and t - wk['last-update'] <= rate_limit_period:
         return False
-    return update_tree_state(ws) or force
+    return update_tree_state(ws, wk) or force
 
 
 def update_state(i3, e=None, rate_limit_period=None,
                  force=False, debounced=False,
-                 all_active_ws=False, only_focused_win=False):
+                 all_active_ws=False):
     logger.debug('[ TOGGLING updat_state(){}; force: {}, debounced: {}'.format(' by event [' + e.change + ']' if e else '', force, debounced))
 
     time.sleep(0.2)  # TODO system-specific; configurize? also, maybe only sleep if it's _not_ debounced?
@@ -330,32 +333,32 @@ def update_state(i3, e=None, rate_limit_period=None,
     focused_con = tree.find_focused()
 
     if (not global_updates_running or
-        focused_con.window_class in win_class_blacklist or
-        (only_focused_win and not e.container.focused)):  # note assumes WindowEvent
-        #(only_focused_win and focused_con.id != event.container.id)  # note assumes WindowEvent
+        focused_con.window_class in win_class_blacklist):  # note assumes WindowEvent
             logger.debug('] update skipped')
+            updater_debounced.reset()
+            ws_update_debounced.reset()
             return
 
     t0 = time.time()
     focused_ws = focused_con.workspace()
 
+    updater_debounced.reset()
+    ws_update_debounced.reset()
+
     if all_active_ws:
         active_ws_list = get_all_active_workspaces(i3, focused_ws)
         wss = [ws for ws in tree.workspaces() if ws.name in active_ws_list]
-        updater_debounced.reset()
-        ws_update_debounced.reset()
     else:  # update/process only the currently focused ws
         wss = [focused_ws]
 
     # either use our legacy grabbing logic...: {
     for ws in wss:
-        update_workspace(ws, focused_ws)
-        if should_update_ws(rate_limit_period, ws, t0, force):
-            i = global_knowledge['wss'][ws.num]
+        wk = update_workspace(ws, focused_ws)
+        if should_update_ws(rate_limit_period, ws, wk, t0, force):
             t1 = time.time()
-            i['screenshot'] = grab_screen(i)
+            wk['screenshot'] = grab_screen(wk)
             logger.debug('  -> grabbing WS {} image took {}'.format(ws.num, time.time()-t1))
-            i['last-update'] = t0
+            wk['last-update'] = t0
 
     # } ...or new py-bindings: {  # this seems to be slower, for whatever the reason
     # params = []
@@ -772,7 +775,7 @@ def on_ws(i3, e):
     if e.current.num in gk:
         gk[e.current.num]['op'] = e.current.ipc_data['output']
 
-    # TODO: sure we want force=True?
+    # TODO: sure we want force=True here?
     ws_update_debounced(i3, e, rate_limit_period=loop_interval, force=True, debounced=True)
 
 
@@ -790,6 +793,28 @@ def on_ws_rename(i3, e):
     gk = global_knowledge['wss']
     if e.current.num in gk:
         gk[e.current.num]['name'] = e.current.name
+
+
+# note we use the PREVIOUSLY_FOCUSED_WIN hack just because window event doesn't
+# include 'old' param such as WorkspaceEvent does
+def on_win_focus(i3, e):
+    logger.debug(' ---- on win FOCUS: {}'.format(e.change))
+
+    # TODO: perhaps here we should also check whether the blacklisted window
+    #       is still visible in this if-block?
+    if global_knowledge['prev_f_w'] in win_class_blacklist:
+        updater_debounced.reset()
+        ws_update_debounced.reset()
+        global_knowledge['prev_f_w'] = e.container.window_class
+        return
+    global_knowledge['prev_f_w'] = e.container.window_class
+    updater_debounced(i3, e)
+
+
+def on_win_title(i3, e):
+    logger.debug(' ---- on win TITLE: {}'.format(e.change))
+    if e.container.focused:  # we only care for win title change if it's focused
+        updater_debounced(i3, e)
 
 
 def run():
@@ -826,8 +851,8 @@ def run():
     i3.on('window::move', updater_debounced)
     i3.on('window::floating', updater_debounced)
     i3.on('window::fullscreen_mode', updater_debounced)
-    i3.on('window::focus', updater_debounced)
-    i3.on('window::title', partial(updater_debounced, only_focused_win=True))
+    i3.on('window::focus', on_win_focus)
+    i3.on('window::title', on_win_title)
     i3.on('workspace::focus', Debounce(0.1, on_ws))  # eg when moving a ws, then many ::focus events seem to be triggered
     i3.on('workspace::init', on_ws)
     i3.on('workspace::move', on_ws)
