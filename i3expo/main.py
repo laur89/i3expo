@@ -34,6 +34,7 @@ from tendo import singleton
 
 from xdg.BaseDirectory import xdg_config_home
 
+SELF_WIN_CLASS = 'i3expo'
 pp = pprint.PrettyPrinter(indent=4)
 
 global_updates_running = True  # if false, we don't grab any screenshots/update internal state
@@ -141,6 +142,8 @@ def hot_reload():
     loop_interval = config.getfloat('CONF', 'forced_update_interval_sec')
     output_blacklist = [x.strip() for x in config.get('CONF', 'output_blacklist').split(',') if x and x.strip()]
     win_class_blacklist = [x.strip() for x in config.get('CONF', 'win_class_blacklist').split(',') if x and x.strip()]
+    if SELF_WIN_CLASS not in win_class_blacklist:
+        win_class_blacklist.append(SELF_WIN_CLASS)
 
     screenshot_lib_path = config.get('CONF', 'screenshot_lib_path')
     grab = ctypes.CDLL(screenshot_lib_path)
@@ -201,7 +204,7 @@ def read_config():
             'forced_update_interval_sec' : 10.0,
             'debounce_period_sec'        : 1.0,
             'output_blacklist'           : '',  # comma-separated values as a string; empty string for none
-            'win_class_blacklist'        : 'i3expo',  # comma-separated values as a string; empty string for none
+            'win_class_blacklist'        : SELF_WIN_CLASS,  # comma-separated values as a string; empty string for none
 
             'names_show'                 : True,
             'names_font'                 : 'verdana',  # list with pygame.font.get_fonts()
@@ -211,7 +214,7 @@ def read_config():
             'screenshot_lib_path'        : os.path.join(os.path.dirname(os.path.realpath(__file__)), 'prtscn.so'),
             'store_state_on_restart'     : True,
             'max_persisted_state_age_sec': 2,
-            'state_f'                    : '/tmp/.i3expo.state',
+            'state_f'                    : '/tmp/.' + SELF_WIN_CLASS + '.state',
             'log_lvl'                    : 'INFO'
         }
     })
@@ -407,7 +410,7 @@ def show_ui(wss):
     ws = global_knowledge['wss'][global_knowledge['active']]
 
     screen = pygame.display.set_mode((ws['w'], ws['h']), pygame.RESIZABLE)
-    pygame.display.set_caption('i3expo')
+    pygame.display.set_caption(SELF_WIN_CLASS)
 
     tiles = {}  # contains grid tile index to thumbnail/ws_screenshot data mappings
     active_tile = None
@@ -805,9 +808,9 @@ def on_win_focus(i3, e):
     if global_knowledge['prev_f_w'] in win_class_blacklist:
         updater_debounced.reset()
         ws_update_debounced.reset()
-        global_knowledge['prev_f_w'] = e.container.window_class
+        if e.container.window_class != SELF_WIN_CLASS: global_knowledge['prev_f_w'] = e.container.window_class
         return
-    global_knowledge['prev_f_w'] = e.container.window_class
+    if e.container.window_class != SELF_WIN_CLASS: global_knowledge['prev_f_w'] = e.container.window_class
     updater_debounced(i3, e)
 
 
@@ -831,7 +834,7 @@ def run():
 
     converters = {'color': get_color}
     config = configparser.ConfigParser(converters = converters)
-    config_file = os.path.join(xdg_config_home, 'i3expo', 'config')
+    config_file = os.path.join(xdg_config_home, SELF_WIN_CLASS, 'config')
     hot_reload()  # reads config and inits other global vars
 
     init_knowledge()
