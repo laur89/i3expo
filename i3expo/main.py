@@ -69,7 +69,10 @@ def signal_quit(signal, stack_frame):
 
 
 def load_global_knowledge() -> dict:
-    default = {'active': -1, 'prev_f_w': None, 'wss': {}}  # 'active' = currently active ws num
+    default = {'active': -1,  # 'active' = currently active ws num
+               'prev_f_w': None,
+               'wss': {}
+              }
 
     state_f = config.get('CONF', 'state_f')
     if not (os.path.isfile(state_f) and os.access(state_f, os.R_OK)):
@@ -163,7 +166,8 @@ def signal_toggle_ui(signal, stack_frame):
     global global_updates_running
 
     if not global_updates_running:  # UI toggle
-        global_updates_running = True
+        global_updates_running = 1  # make sure UI gets closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
+                                    # note int type is to signify special condition to input_event_loop().
         return
 
     wss = shown_ws()
@@ -399,6 +403,8 @@ def get_hovered_tile(mpos, tiles):
 def show_ui(wss):
     global global_updates_running
 
+    pre_expo_focused_win_id = i3.get_tree().find_focused().id
+
     frame_active_color = config.getcolor('CONF', 'frame_active_color')
     frame_inactive_color = config.getcolor('CONF', 'frame_inactive_color')
     frame_missing_color = config.getcolor('CONF', 'frame_missing_color')
@@ -465,10 +471,18 @@ def show_ui(wss):
 
     draw_grid(screen, grid)
     pygame.display.flip()  # update full dispaly Surface on the screen
-    input_event_loop(screen, tiles, active_tile, grid_layout, wss2)
+    i = input_event_loop(screen, tiles, active_tile, grid_layout, wss2)
     pygame.display.quit()
     pygame.quit()
-    global_updates_running = True
+
+    # restore focus on previously focused window if we didn't switch WS; otherwise
+    # the focus will likely be stolen from a floating/stacked window:
+    if i is not None:  # TODO: this additional check is not needed, right?:   and i3.get_tree().find_focused().workspace().num == global_knowledge['active']:
+        i3.command('[con_id={}] focus'.format(pre_expo_focused_win_id))
+
+    global_updates_running = True  # should be set before we send 'workspace' cmd! this way on_ws() won't set global_updates_running again
+    if isinstance(i, str):
+        i3.command(i)
 
 
 def process_img(shot):
@@ -638,19 +652,27 @@ def resolve_grid_layout(screen_w, screen_h, wss) -> list[int]:
     return grid
 
 
+# return of not-None means we should focus the
+# previously-focused window upon the closure of expo UI
+#
+# and only str output should mean returned WS-num should be focused
 def input_event_loop(screen, tiles, active_tile, grid, wss):
     t1 = time.time()
-    running = True
     workspaces = len(wss)
 
-    while running and not global_updates_running and pygame.display.get_init():
+    while pygame.display.get_init():  # Returns True if the display module has been initialized
+        if global_updates_running:
+            if isinstance(global_updates_running, bool):  # note bools are subclass of int, but not the other way around
+                return None
+            return 1  # not string nor None
+
         is_mouse_input = False
         kbdmove = None
         jump = False   # states whether we're navigating into a selected ws
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                return 1  # not string nor None
             elif event.type == pygame.MOUSEMOTION:
                 is_mouse_input = True
             elif event.type == pygame.KEYDOWN:
@@ -665,7 +687,7 @@ def input_event_loop(screen, tiles, active_tile, grid, wss):
                 elif event.key == pygame.K_RETURN:
                     jump = True
                 elif event.key == pygame.K_ESCAPE:
-                    running = False
+                    return 1  # not string nor None
 
                 pygame.event.clear()
                 break
@@ -714,14 +736,14 @@ def input_event_loop(screen, tiles, active_tile, grid, wss):
 
         if jump and active_tile is not None:
             target_ws_num = tiles[active_tile]['ws']
-            i3.command('workspace ' + str(global_knowledge['wss'][target_ws_num]['name']))
-            break
+            return 'workspace ' + str(global_knowledge['wss'][target_ws_num]['name'])
 
         draw_tile_overlays(screen, active_tile, tiles)
 
         if pygame.display.get_init():  # check as UI might've been closed by on_ws() from other thread
             pygame.display.update()
             pygame.time.wait(50)
+    return 1  # not None, not str; unsure about this actually; think this statement is a corner case anyway
 
 
 def get_new_active_tile(tiles, active_tile, next_tiles):
@@ -752,8 +774,8 @@ def draw_tile_overlays(screen, active_tile, tiles):
 
 def on_ws(i3, e):
     global global_updates_running
-
-    global_updates_running = True  # make sure UI is closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
+    if not global_updates_running:
+        global_updates_running = True  # make sure UI gets closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
 
     logger.debug(' ---- on ws state: {}, num: {}'.format(e.change, e.current.num))
     gk = global_knowledge['wss']
