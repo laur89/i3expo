@@ -1,4 +1,4 @@
-## 0.0.5 (unreleased)
+## 0.0.5 (2025-06-04)
 
 - restore floating window to focus when returning to WS
 - restore window focus when expo is closed/toggled
