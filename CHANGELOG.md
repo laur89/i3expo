@@ -1,11 +1,12 @@
 ## 0.0.5 (unreleased)
 
-
-- Nothing changed yet.
+- restore floating window to focus when returning to WS
+- restore window focus when expo is closed/toggled
+- track previously focused window class in global_knowldege to add
+  extra precaution for not capturing blacklisted windows
 
 
 ## 0.0.4 (2025-03-15)
-
 
 - lock process to guarantee single instance
 - store screenshot with its dimensions, so it's never ambiguous on usage
