@@ -259,7 +259,8 @@ def update_workspace(ws, focused_ws, hydration=False) -> dict:
             'w'           : 0,
             'h'           : 0,
             'ratio'       : 0.0,
-            'windows'     : {}    # TODO unused atm
+            'windows'     : {},    # TODO unused atm
+            'ff'          : None   # float-focus; ID of a floating window to focus when we return to this WS
         }
 
     # some data should not be set on first state hydration, e.g. missing polybar
@@ -774,31 +775,37 @@ def draw_tile_overlays(screen, active_tile, tiles):
 
 def on_ws(i3, e):
     global global_updates_running
-    if not global_updates_running:
-        global_updates_running = True  # make sure UI gets closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
 
     logger.debug(' ---- on ws state: {}, num: {}'.format(e.change, e.current.num))
     gk = global_knowledge['wss']
-    # focused_ws = i3.get_tree().find_focused().workspace()
-
-    # ops = [o for o in i3.get_outputs() if o.active]
-    # for output in ops:
-        # ws = next((k for k, v in gk.items() if v['name'] == output.current_workspace), None)
-        # ws['op'] = output.name
-        # # is_op_whitelisted = output.name not in output_blacklist or focused_ws.name == output.current_workspace
-        # if focused_ws.name == output.name:
-            # gk[focused_ws.num]['op'] = output.name
-
-    # or:
-    # for output in [o for o in i3.get_outputs() if o.active]:
-        # for _, ws_knowledge in gk.items():
-            # if ws_knowledge['name'] == output.current_workspace:
-                # ws_knowledge['op'] = output.name
-                # break
-
-    # or:
     if e.current.num in gk:
-        gk[e.current.num]['op'] = e.current.ipc_data['output']
+        gk = gk[e.current.num]
+        gk['op'] = e.current.ipc_data['output']
+    else:
+        gk = None
+
+    if not global_updates_running:
+        # this block gets executed if we exit expo by moving focus to other WS, ie. not by toggling WS change via expo itself
+
+        global_updates_running = True  # make sure UI gets closed on workspace switch (including if we move cursor to neighboring WS when UI is rendered)
+
+        # if a floating window was focused on the WS we just moved away from (that had expo opened),
+        # store it in global_knowledge so we can focus it once we return to that WS.
+        # Note this logic is not too great, as e.old.focus[0] seems to bundle the entire
+        # tiled container, so it doesn't matter if _actual_ focused window was a floating
+        # one or a tiled one, it still resolves to focus[1] and store it if it's a float.
+        #
+        # as in, if we have floating window visible, focused or not, it'll always be
+        # at focus[1] as i3expo window will be listed in container ID-d by focus[0]
+        #
+        # (note [e.old is not None] implies change='focus')
+        if e.old is not None and e.old.num in global_knowledge['wss'] and len(e.old.focus) > 1:  # TODO schedule focus events when returning to ws??? sounds like hacky & loads of corner cases
+            win = i3.get_tree().find_by_id(e.old.focus[1])
+            if win.type == 'floating_con' and win.focus:
+                global_knowledge['wss'][e.old.num]['ff'] = win.focus[0]
+    elif gk is not None and gk['ff'] is not None and e.change == 'focus':
+        i3.command('[con_id={}] focus'.format(gk['ff']))
+        gk['ff'] = None  # reset
 
     # TODO: sure we want force=True here?
     ws_update_debounced(i3, e, rate_limit_period=loop_interval, force=True, debounced=True)
