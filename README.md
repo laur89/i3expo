@@ -35,7 +35,7 @@ pipx install i3expo
 Launch i3expo from i3 config; alternatively you may prefer to run `i3expo` in a
 terminal in order to catch any errors in this pre-alpha stage.
 
-Default configuration is written into `$XDG_CONFIG_DIR/i3expo/config`. Color values
+Default configuration is written into `$XDG_CONFIG_HOME/i3expo/config`. Color values
 can be specified by using their PyGame names or in #fff or #ffffff hex.
 
 Send `SIGUSR1` to `i3expo` to toggle the Expo UI, for example by adding a `bindsym`
@@ -93,5 +93,5 @@ it's not clear if it would be worth the effort.
 
 - original code from https://gitlab.com/d.reis/i3expo
     - for a time this fork was developed under https://gitlab.com/layr89/i3expo
-- Stackoverflow user JHolta for the screenshot library to be found in this thread:
-https://stackoverflow.com/questions/69645/take-a-screenshot-via-a-python-script-linux
+- Stackoverflow [answer](https://stackoverflow.com/a/16141058/1803648) for the
+  screenshot library
